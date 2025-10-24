@@ -2,11 +2,20 @@ import streamlit as st
 
 from config.env import load_env_doc, save_env_doc
 from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, verify_user
-from ui.chat import chat_window
+# Import the new functions
+from ui.chat import render_chat_ui, process_new_message
 from ui.admin import admin_dashboard
 
-APP_TITLE = "💬 RAG Chat (Mongo-config only)"
-st.set_page_config(page_title=APP_TITLE, page_icon="💬", layout="wide")
+# --- UPDATED APP TITLE ---
+APP_TITLE = "💬 RükoGPT"
+# -------------------------
+
+st.set_page_config(
+    page_title=APP_TITLE,
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 
 def setup_screen():
@@ -51,7 +60,7 @@ def setup_screen():
             db = client[(db_name.strip() or "rag_chat")]
             try:
                 ensure_indexes(db)
-                seed_admin_if_empty(db)   # seeds admin if empty
+                seed_admin_if_empty(db)  # seeds admin if empty
                 # Persist full env doc into Mongo so cloud runs pull from DB thereafter
                 save_env_doc({"mongo_uri": test_uri, "mongo_db": db.name}, db=db)
             except Exception:
@@ -122,11 +131,34 @@ with st.sidebar:
 if not st.session_state["auth_user"]:
     login_screen(db)
 else:
+    # State for chat
+    current_conv_id = None
+    username = st.session_state["auth_user"]
+
     if st.session_state.get("is_admin"):
         tab_chat, tab_admin = st.tabs(["💬 Chat", "🛡️ Admin"])
         with tab_chat:
-            chat_window(db, env_doc, st.session_state["auth_user"])
+            # Render chat messages and sidebar
+            current_conv_id = render_chat_ui(db, username)
         with tab_admin:
             admin_dashboard(db, env_doc)
     else:
-        chat_window(db, env_doc, st.session_state["auth_user"])
+        # Render chat messages and sidebar
+        current_conv_id = render_chat_ui(db, username)
+
+    # --- Place st.chat_input at the top level ---
+    prompt = st.chat_input("Ask about your documents or anything...")
+
+    if prompt:
+        if current_conv_id:
+            # We can process the message regardless of the tab,
+            # as long as a conversation is selected.
+            process_new_message(db, env_doc, username, current_conv_id, prompt)
+
+            # Rerun only if we are in the admin tab view to refresh the chat
+            # This is a small hack to make sure the tab content updates
+            if st.session_state.get("is_admin"):
+                st.rerun()
+        else:
+            # This case might happen if no chat is created yet, etc.
+            st.error("No active conversation selected.")
