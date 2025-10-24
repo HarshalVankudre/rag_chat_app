@@ -13,7 +13,11 @@
   "max_context_chars": 8000,
   "metadata_text_key": "text",
   "metadata_source_key": "source",
-  "system_prompt": "You are a helpful assistant that answers strictly using the provided CONTEXT.\nIf the answer cannot be found in the context, say you don't know clearly.\nWhen helpful, cite sources by filename/URL from metadata.\nUse concise markdown with bullet points and short paragraphs.",
+  "system_prompt": "You are a helpful assistant.\nYou have two information sources:\n1) CHAT HISTORY (previous turns)\n2) CONTEXT (retrieved document chunks)\nGuidelines:\n- Prefer answers grounded in CONTEXT whenever it is sufficient.\n- If CONTEXT is insufficient or empty and general answers are allowed, answer from general knowledge (do NOT invent citations).\n- For meta-questions about the conversation (e.g., 'what was my last question?'), use CHAT HISTORY.\n- If you truly don't know, say so clearly.\n",
   "mongo_uri": "mongodb+srv://harshalvankudre_db_user:QYJ7qsxDnQg6OS8x@chatbot-1.acaznw5.mongodb.net/?retryWrites=true&w=majority&appName=chatbot-1",
-  "mongo_db": "rag_chat"
+  "mongo_db": "rag_chat",
+  "allow_general_answers": true,
+  "rag_min_context_chars": 600,
+  "rag_min_matches": 1,
+  "rag_min_score": 0.0
 }
