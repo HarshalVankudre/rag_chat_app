@@ -169,8 +169,3 @@ rag_chat_app/
 Released under the **MIT License** — free for personal and commercial use.
 
 ---
-
-
-<p align="center">
-  Made with ❤️ using <b>Streamlit</b>, <b>OpenAI</b>, <b>Pinecone</b>, and <b>MongoDB</b>.
-</p>
