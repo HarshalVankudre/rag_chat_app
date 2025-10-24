@@ -1,0 +1,22 @@
+# Based on .gitignore
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.streamlit/
+.cache/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+dist/
+build/
+*.egg-info/
+
+# Docker-specific
+Dockerfile
+.dockerignore
+README.md
