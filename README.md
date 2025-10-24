@@ -170,9 +170,6 @@ Released under the **MIT License** — free for personal and commercial use.
 
 ---
 
-<p align="center">
-  <img src="https://github-readme-stats.vercel.app/api?username=yourusername&show_icons=true&theme=radical" width="400" />
-</p>
 
 <p align="center">
   Made with ❤️ using <b>Streamlit</b>, <b>OpenAI</b>, <b>Pinecone</b>, and <b>MongoDB</b>.
