@@ -1,0 +1,19 @@
+{
+  "_id": "global",
+  "openai_api_key": "",
+  "openai_base_url": "",
+  "openai_model": "gpt-4o-mini",
+  "embedding_model": "text-embedding-3-small",
+  "pinecone_api_key": "",
+  "pinecone_host": "",
+  "pinecone_index_name": "",
+  "pinecone_namespace": "",
+  "top_k": 5,
+  "temperature": 0.2,
+  "max_context_chars": 8000,
+  "metadata_text_key": "text",
+  "metadata_source_key": "source",
+  "system_prompt": "You are a helpful assistant that answers strictly using the provided CONTEXT.\nIf the answer cannot be found in the context, say you don't know clearly.\nWhen helpful, cite sources by filename/URL from metadata.\nUse concise markdown with bullet points and short paragraphs.",
+  "mongo_uri": "mongodb+srv://harshalvankudre_db_user:QYJ7qsxDnQg6OS8x@chatbot-1.acaznw5.mongodb.net/?retryWrites=true&w=majority&appName=chatbot-1",
+  "mongo_db": "rag_chat"
+}
