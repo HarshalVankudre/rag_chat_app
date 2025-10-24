@@ -1,111 +1,114 @@
 import streamlit as st
 
-from models.settings import default_env
 from config.env import load_env_doc, save_env_doc
 from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, verify_user
 from ui.chat import chat_window
 from ui.admin import admin_dashboard
 
-
-APP_TITLE = "🔐 RAG Chat (Admins & Users, MongoDB, Pinecone)"
-st.set_page_config(page_title=APP_TITLE, page_icon="🔐", layout="wide")
+APP_TITLE = "💬 RAG Chat (Mongo-config only)"
+st.set_page_config(page_title=APP_TITLE, page_icon="💬", layout="wide")
 
 
 def setup_screen():
-    """First-run setup screen shown when MongoDB is not configured yet."""
+    """First-run setup to enter Mongo URI/DB. Does NOT prefill or show secrets."""
     st.title("🛠️ First-run setup: MongoDB")
     st.write(
-        "Paste your MongoDB connection string and database name. "
-        "This saves locally so the app can connect and seed the admin user."
+        "Enter your MongoDB connection string and database name. "
+        "Values are stored in Mongo (collection `env`) after a successful connect."
     )
 
-    # Prefill with your known values to make this easy
     uri = st.text_input(
         "Mongo URI",
-        value=(
-            "mongodb+srv://harshalvankudre_db_user:QYJ7qsxDnQg6OS8x"
-            "@chatbot-1.acaznw5.mongodb.net/?retryWrites=true&w=majority&appName=chatbot-1"
-        ),
+        value="",
+        type="password",
+        placeholder="mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority&appName=chatbot",
+        help="The value is masked and not displayed back. It will be saved to Mongo after connection."
     )
-    db_name = st.text_input("Mongo DB name", value="rag_chat")
+    db_name = st.text_input("Mongo DB name", value="rag_chat", placeholder="rag_chat")
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 Save & Connect"):
-            # Save to local env JSON so the very next run can connect to Mongo
-            save_env_doc({"mongo_uri": uri.strip(), "mongo_db": db_name.strip()}, db=None)
-            st.success("Saved. Re-running the app to connect…")
+        if st.button("💾 Save & Connect", use_container_width=True):
+            test_uri = uri.strip()
+            if not test_uri:
+                st.error("Please paste a Mongo URI.")
+                return
+
+            # Try connect first (no secrets persisted yet)
+            client = get_mongo(test_uri)
+            if client is None:
+                st.error(
+                    "Could not connect to MongoDB.\n\n"
+                    "- Check username/password\n"
+                    "- Ensure Atlas Network Access allows this host (Streamlit Cloud egress IPs)\n"
+                    "- Verify the connection string"
+                )
+                return
+
+            # On success: write to local file (dev) so next boot reuses; also seed DB
+            save_env_doc({"mongo_uri": test_uri, "mongo_db": db_name.strip() or "rag_chat"}, db=None)
+
+            db = client[(db_name.strip() or "rag_chat")]
+            try:
+                ensure_indexes(db)
+                seed_admin_if_empty(db)   # seeds admin if empty
+                # Persist full env doc into Mongo so cloud runs pull from DB thereafter
+                save_env_doc({"mongo_uri": test_uri, "mongo_db": db.name}, db=db)
+            except Exception:
+                pass
+
+            st.success("MongoDB connected. Re-running the app…")
             st.rerun()
     with col2:
-        st.caption("You can change these later in Admin → Environment.")
+        st.caption("Tip: If Streamlit Cloud can't reach Mongo, check Atlas IP allowlist.")
 
 
 def login_screen(db):
-    """Username/password login. Admin is auto-seeded in Mongo on first connect."""
     st.title("🔐 Login")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
-    col1, col2 = st.columns([2, 3])
-    with col1:
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.button("Sign in"):
-            if db is None:
-                st.error(
-                    "MongoDB is not configured yet. Use the first-run setup to save your Mongo URI."
-                )
+    if st.button("Sign in"):
+        if db is None:
+            st.error("MongoDB is not configured yet.")
+        else:
+            if verify_user(db, username, password):
+                user_doc = db["users"].find_one({"username": username}) or {}
+                st.session_state["auth_user"] = username
+                st.session_state["is_admin"] = (user_doc.get("role") == "admin")
+                st.rerun()
             else:
-                if verify_user(db, username, password):
-                    u = db["users"].find_one({"username": username})
-                    st.session_state["auth_user"] = username
-                    st.session_state["is_admin"] = (u.get("role") == "admin")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials.")
-    with col2:
-        st.info(
-            "Default admin credentials (auto-seeded on first Mongo connect):\n"
-            "- **user**: `admin`\n"
-            "- **password**: `password 123`"
-        )
+                st.error("Invalid credentials.")
 
 
-# -----------------------------
-# Bootstrap: load env + connect
-# -----------------------------
-# 1) Load local env first (may only contain Mongo URI/DB on first run)
+# -------- Bootstrap: read config and try connecting --------
 env_local = load_env_doc(db=None)
-
-# 2) Try connecting to Mongo using whatever URI is there right now
 mongo_client = get_mongo(env_local.get("mongo_uri"))
 db = None
 if mongo_client is not None:
     db = mongo_client[env_local.get("mongo_db", "rag_chat")]
     try:
         ensure_indexes(db)
-        seed_admin_if_empty(db)  # ensures admin/admin-cred exists
+        seed_admin_if_empty(db)
     except Exception:
         pass
 
-# 3) Load the latest env from Mongo if available (merged with defaults)
 env_doc = load_env_doc(db) if db is not None else env_local
 
-# If no DB connection yet, show setup screen and stop
+# If still no DB connection, show setup page
 if db is None:
     setup_screen()
     st.stop()
 
-
-# -----------------------------
-# Sidebar auth controls
-# -----------------------------
+# -------- Sidebar session controls --------
 with st.sidebar:
+    st.markdown(f"### {APP_TITLE}")
     if "auth_user" not in st.session_state:
         st.session_state["auth_user"] = None
     if "is_admin" not in st.session_state:
         st.session_state["is_admin"] = False
 
-    st.markdown(f"### {APP_TITLE}")
-    if st.session_state.get("auth_user"):
+    if st.session_state["auth_user"]:
         st.success(
             f"Signed in as **{st.session_state['auth_user']}** "
             f"{'(admin)' if st.session_state.get('is_admin') else ''}"
@@ -115,20 +118,15 @@ with st.sidebar:
                 st.session_state.pop(k, None)
             st.rerun()
 
-
-# -----------------------------
-# Main routing
-# -----------------------------
+# -------- Main routing --------
 if not st.session_state["auth_user"]:
     login_screen(db)
 else:
     if st.session_state.get("is_admin"):
         tab_chat, tab_admin = st.tabs(["💬 Chat", "🛡️ Admin"])
         with tab_chat:
-            # Chat window always reloads fresh ENV from Mongo internally
             chat_window(db, env_doc, st.session_state["auth_user"])
         with tab_admin:
-            # Admin dashboard reruns after saving env to avoid stale settings
             admin_dashboard(db, env_doc)
     else:
         chat_window(db, env_doc, st.session_state["auth_user"])
