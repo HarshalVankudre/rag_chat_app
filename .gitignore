@@ -1,0 +1,17 @@
+echo "# Python and Streamlit ignore file
+venv/
+.venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.streamlit/
+.cache/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+dist/
+build/
+*.egg-info/" > .gitignore
