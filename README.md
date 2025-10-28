@@ -22,7 +22,6 @@ An intelligent, document-aware chatbot built with <b>Streamlit</b>, powered by <
 ## 🌟 Key Features
 
 - **🔐 Admin Authentication**
-  - Default credentials: `admin` / `password 123`
   - Manage API keys, Mongo URI, Pinecone settings, and add new users.
   - All environment variables securely stored in MongoDB.
 
