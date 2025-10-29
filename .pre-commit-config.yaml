@@ -8,6 +8,6 @@ repos:
     # Run the linter
     -   id: ruff
         args: [--fix, --exit-non-zero-on-fix]
-    # Run the formatter
+    # Run theformatter
     -   id: ruff-format
 
