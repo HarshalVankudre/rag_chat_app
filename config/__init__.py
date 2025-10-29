@@ -1,2 +1,1 @@
-# This file makes 'config' a Python package.
-
+"""Configuration utilities for the RAG chat application."""
