@@ -16,8 +16,10 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
     "2) CONTEXT (retrieved document chunks)\n"
     "Guidelines:\n"
     "- Prefer answers grounded in CONTEXT whenever it is sufficient.\n"
-    "- If CONTEXT is insufficient or empty and general answers are allowed, answer from general knowledge (do NOT invent citations).\n"
-    "- For meta-questions about the conversation (e.g., 'what was my last question?'), use CHAT HISTORY.\n"
+    "- If CONTEXT is insufficient or empty and general answers are allowed, "
+    "answer from general knowledge (do NOT invent citations).\n"
+    "- For meta-questions about the conversation (e.g., 'what was my last question?'), "
+    "use CHAT HISTORY.\n"
     "- If you truly don't know, say so clearly.\n"
 )
 
@@ -45,7 +47,10 @@ def default_env() -> dict[str, Any]:
         "metadata_source_key": "source",
         "system_prompt": DEFAULT_CHAT_SYSTEM_PROMPT,
         # Mongo
-        "mongo_uri": "mongodb+srv://harshalvankudre_db_user:<db_password>@chatbot-1.acaznw5.mongodb.net/?appName=chatbot-1",
+        "mongo_uri": (
+            "mongodb+srv://harshalvankudre_db_user:<db_password>"
+            "@chatbot-1.acaznw5.mongodb.net/?appName=chatbot-1"
+        ),
         "mongo_db": "rag_chat",
         # RAG vs general fallback
         "allow_general_answers": True,
@@ -53,23 +58,29 @@ def default_env() -> dict[str, Any]:
         "rag_min_matches": 1,
         "rag_min_score": 0.0,
         # --- NEW: Auth settings ---
-        "auth_secret_key": "your_strong_secret_key_here",  # IMPORTANT: Change this in your env
+        # IMPORTANT: Change this in your environment.
+        "auth_secret_key": "your_strong_secret_key_here",
         "auth_cookie_expiry_days": 30,
     }
 
 
+MISSING_OPENAI_KEY_MSG = "openai_api_key cannot be blank"
+MISSING_PINECONE_KEY_MSG = "pinecone_api_key cannot be blank"
+
+
 class AppSettings(BaseModel):
+    """Strongly-typed settings derived from the persisted environment document."""
     # OpenAI
     openai_api_key: str
-    openai_base_url: Optional[str] = None
+    openai_base_url: str | None = None
     openai_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
 
     # Pinecone
     pinecone_api_key: str
-    pinecone_index_name: Optional[str] = None
-    pinecone_host: Optional[str] = None
-    pinecone_namespace: Optional[str] = None
+    pinecone_index_name: str | None = None
+    pinecone_host: str | None = None
+    pinecone_namespace: str | None = None
 
     # Retrieval / generation
     top_k: int = 5
@@ -82,7 +93,7 @@ class AppSettings(BaseModel):
     system_prompt: str = DEFAULT_CHAT_SYSTEM_PROMPT
 
     # Mongo
-    mongo_uri: Optional[str] = None
+    mongo_uri: str | None = None
     mongo_db: str = "rag_chat"
 
     # RAG vs general fallback
@@ -100,9 +111,9 @@ class AppSettings(BaseModel):
         """Validate secrets and normalise optional string fields."""
 
         if not (self.openai_api_key and self.openai_api_key.strip()):
-            raise ValueError("openai_api_key cannot be blank")
+            raise ValueError(MISSING_OPENAI_KEY_MSG)
         if not (self.pinecone_api_key and self.pinecone_api_key.strip()):
-            raise ValueError("pinecone_api_key cannot be blank")
+            raise ValueError(MISSING_PINECONE_KEY_MSG)
 
         # --- NEW: Check for default secret key ---
         if self.auth_secret_key == "your_strong_secret_key_here":
