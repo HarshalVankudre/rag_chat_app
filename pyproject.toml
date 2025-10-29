@@ -1,17 +1,15 @@
 [tool.poetry]
 name = "rag-chat-app"
 version = "1.0.0"
-description = "Streamlit RAG Chat App with MongoDB and Pinecone"
+description = "A production-grade RAG chat app"
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
-package-mode = false # Keep this line
+package-mode = false
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = ">=3.10, <3.13"
 streamlit = ">=1.36"
 openai = ">=1.40.0"
-# pinecone-client = "^6.0.0" # <-- REMOVED OLD NAME
-pinecone = ">=5.0.0"      # <-- ADDED NEW NAME
 pydantic = ">=2.5.0"
 pypdf = ">=4.0.0"
 python-docx = ">=1.0.0"
@@ -19,84 +17,77 @@ pymongo = ">=4.7.3"
 dnspython = ">=2.6.1"
 streamlit-authenticator = ">=0.3.0"
 bcrypt = ">=4.0.0"
-pyreadline3 = {markers = "sys_platform == \"win32\"", version = "^3.5.4"}
+# Switched from pinecone-client to pinecone
+pinecone = "^5.0.0"
+# Added windows-specific dependency for pinecone
+"pyreadline3; sys_platform == 'win32'" = "*"
 
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
-pytest-mock = "^3.10.0"
+pytest-mock = "^3.12.0"
 ruff = "^0.4.0"
-mypy = "^1.8.0"
-pre-commit = "^3.6.0"
-
+pre-commit = "^3.7.0"
+mypy = "^1.10.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-# Ruff configuration (from previous step)
+# -----------------------------------------------------------------
+# RUFF CONFIGURATION (LATEST)
+# -----------------------------------------------------------------
+
 [tool.ruff]
+# Settings that apply to BOTH linting and formatting
 line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# A more modern, comprehensive ruleset than default
 select = [
-    "E",  # pycodestyle errors
-    "W",  # pycodestyle warnings
-    "F",  # Pyflakes
-    "I",  # isort
-    "C",  # flake8-comprehensions
+    "E",  # pycodestyle (errors)
+    "W",  # pycodestyle (warnings)
+    "F",  # pyflakes (errors)
+    "I",  # isort (import sorting)
     "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
     "UP", # pyupgrade
     "ANN",# flake8-annotations
     "BLE",# flake8-blind-except
-    "FBT",# flake8-boolean-trap
-    "ISC",# flake8-implicit-str-concat
-    "G",  # flake8-logging-format
-    "INP",# flake8-no-pep420
-    "PIE",# flake8-pie
-    "T20",# flake8-print
-    "PYI",# flake8-pyi
-    "PT", # flake8-pytest-style
-    "RET",# flake8-return
-    "SLF",# flake8-self
-    "SIM",# flake8-simplify
-    "TID",# flake8-tidy-imports
-    "TCH",# flake8-type-checking
-    "ARG",# flake8-unused-arguments
-    "PTH",# flake8-use-pathlib
-    "ERA",# eradicate
-    "PD", # pandas-vet
-    "PGH",# pygrep-hooks
-    "PL", # Pylint
-    "TRY",# tryceratops
-    "FLY",# flynt
-    "NPY",# NumPy specific rules
-    "PERF",# Perflint
-    "RUF",# Ruff-specific rules
-    "DTZ",# flake8-datetimez
-    "S",  # flake8-bandit (security)
-    "EM", # flake8-errmsg
     "D",  # pydocstyle
+    "S",  # flake8-bandit (security)
+    "T20",# flake8-print
+    "SIM",# flake8-simplify
+    "PTH",# flake8-use-pathlib
+    "TRY",# tryceratops
+    "RUF",# Ruff-specific rules
 ]
+
+# Ignore specific errors
 ignore = [
-    "ANN101", # Ignore missing type hints for `self`
-    "ANN102", # Ignore missing type hints for `cls`
-    "ANN401", # Ignore `Any` type allowed
-    "D100",   # Ignore missing docstring in public module
-    "D104",   # Ignore missing docstring in public package
-    "D107",   # Ignore missing docstring in `__init__`
-    "D203",   # Ignore one-blank-line-before-class (conflicts with D211)
-    "D213",   # Ignore multi-line-summary-second-line (conflicts with D212)
-    "COM812", # Ignore missing trailing comma (handled by formatter)
-    "ISC001", # Ignore implicitly concatenated strings (handled by formatter)
-    "RUF001", # Ignore ambiguous unicode characters (like your emojis)
+    "D203", # Incompatible with D211
+    "D212", # Incompatible with D213
+    "D213", # Incompatible with D212
+    "ANN101", # Missing type annotation for 'self'
+    "ANN102", # Missing type annotation for 'cls'
+    "ERA001", # "Commented out code" - we ignore this
+    "RUF001", # Ignore ambiguous unicode (emojis)
 ]
+
+# Configure pydocstyle
+[tool.ruff.lint.pydocstyle]
+convention = "google" # Use Google-style docstrings
 
 [tool.ruff.lint.per-file-ignores]
-# Ignore long lines (E501) and commented out code (ERA001) in i18n file
-"config/i18n.py" = ["E501", "ERA001"]
+# Ignore long lines (E501) in the i18n file
+"config/i18n.py" = ["E501"]
+# Ignore "hardcoded password" (S105) in the settings model
+"models/settings.py" = ["S105"]
+# Allow tests to use "assert" (S101)
+"tests/*.py" = ["S101"]
 
 [tool.ruff.format]
+# Use double quotes for strings
 quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "auto"
 
