@@ -1,4 +1,4 @@
-# config/i18n.py
+"""Static translations used throughout the Streamlit UI."""
 
 # --- English Strings ---
 en_strings = {
@@ -45,6 +45,8 @@ en_strings = {
     "admin_env_pinecone_api_key": "Pinecone API Key",
     "admin_env_pinecone_host": "Pinecone Host (recommended)",
     "admin_env_pinecone_index_name": "Pinecone Index name (dev)",
+    "admin_env_pinecone_index_names": "Pinecone retrieval indexes (one per line)",
+    "admin_env_pinecone_index_names_help": "Optional list of Pinecone index names to search during retrieval. Separate with new lines or commas.",
     "admin_env_pinecone_namespace": "Default Namespace",
     "admin_env_top_k": "Top K",
     "admin_env_temperature": "Temperature",
@@ -106,11 +108,16 @@ en_strings = {
     "chat_no_info_fallback": "I do not have enough information in the provided documents to answer that.",
     "chat_sources_expander": "🔎 Sources used",
     "chat_sources_label_no_source": "(no source metadata)",
+    "chat_sources_index_label": "index",
     # ui/ingest.py
     "ingest_title": "📥 Upload & Ingest Documents to Pinecone",
     "ingest_error_env_not_configured": "Environment not configured. Open Admin → Environment and save your keys.",
     "ingest_file_uploader": "Choose documents",
     "ingest_namespace_label": "Namespace (leave blank to use default)",
+    "ingest_target_index_label": "Target Pinecone index",
+    "ingest_target_index_help": "Select or type the Pinecone index used for new vectors. Available indexes: {index_list}",
+    "ingest_target_index_help_empty": "Select or type the Pinecone index used for new vectors.",
+    "ingest_target_index_help_host": "Using the configured Pinecone host; queries will target the associated service.",
     "ingest_chunk_size": "Chunk size",
     "ingest_chunk_overlap": "Chunk overlap",
     "ingest_submit_button": "🚀 Embed & Upsert",
@@ -175,6 +182,8 @@ de_strings = {
     "admin_env_pinecone_api_key": "Pinecone API-Schlüssel",
     "admin_env_pinecone_host": "Pinecone-Host (empfohlen)",
     "admin_env_pinecone_index_name": "Pinecone-Indexname (dev)",
+    "admin_env_pinecone_index_names": "Pinecone-Retrieval-Indizes (je Zeile einer)",
+    "admin_env_pinecone_index_names_help": "Optionale Liste von Pinecone-Indizes für die Suche. Mit Zeilenumbrüchen oder Kommas trennen.",
     "admin_env_pinecone_namespace": "Standard-Namespace",
     "admin_env_top_k": "Top K",
     "admin_env_temperature": "Temperatur",
@@ -236,11 +245,16 @@ de_strings = {
     "chat_no_info_fallback": "Ich habe nicht genügend Informationen in den bereitgestellten Dokumenten, um das zu beantworten.",
     "chat_sources_expander": "🔎 Verwendete Quellen",
     "chat_sources_label_no_source": "(keine Quell-Metadaten)",
+    "chat_sources_index_label": "Index",
     # ui/ingest.py
     "ingest_title": "📥 Dokumente hochladen & in Pinecone importieren",
     "ingest_error_env_not_configured": "Umgebung nicht konfiguriert. Öffnen Sie Admin → Umgebung und speichern Sie Ihre Schlüssel.",
     "ingest_file_uploader": "Dokumente auswählen",
     "ingest_namespace_label": "Namespace (leer lassen für Standard)",
+    "ingest_target_index_label": "Ziel-Pinecone-Index",
+    "ingest_target_index_help": "Wählen oder geben Sie den Pinecone-Index für neue Vektoren ein. Verfügbare Indizes: {index_list}",
+    "ingest_target_index_help_empty": "Wählen oder geben Sie den Pinecone-Index für neue Vektoren ein.",
+    "ingest_target_index_help_host": "Verwendet den konfigurierten Pinecone-Host; Anfragen gehen an diesen Dienst.",
     "ingest_chunk_size": "Chunk-Größe",
     "ingest_chunk_overlap": "Chunk-Überlappung",
     "ingest_submit_button": "🚀 Einbetten & Hochladen",
@@ -262,7 +276,8 @@ de_strings = {
 
 
 def get_lang(lang_code: str) -> dict:
-    """Returns the dictionary of strings for the given language code.
+    """Return strings for the given language code.
+
     Defaults to English.
     """
     if lang_code == "de":

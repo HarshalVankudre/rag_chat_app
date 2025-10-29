@@ -1,2 +1,1 @@
-# This file makes 'rag' a Python package.
-
+"""Retrieval-augmented generation helpers for the chat application."""

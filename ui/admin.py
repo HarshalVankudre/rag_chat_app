@@ -1,8 +1,12 @@
+"""Streamlit admin dashboard views."""
+
 import logging
-from typing import Any, Dict
+from collections.abc import Mapping
+from typing import Any
 
 import streamlit as st
 from pydantic import ValidationError
+from pymongo.database import Database
 
 from config.env import save_env_doc
 from db.mongo import add_user, delete_user
@@ -14,7 +18,8 @@ from .ingest import ingest_panel
 logger = logging.getLogger(__name__)
 
 
-def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
+def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, str]) -> None:
+    """Render the admin dashboard with environment, user, and ingest tools."""
     st.header(lang["admin_dashboard_title"])
 
     # --- Sidebar navigation for admin sections ---
@@ -62,6 +67,24 @@ def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
                 lang["admin_env_pinecone_index_name"],
                 value=env_doc.get("pinecone_index_name", ""),
             )
+            existing_indexes = env_doc.get("pinecone_index_names", [])
+            if isinstance(existing_indexes, str):
+                existing_value = existing_indexes
+            elif isinstance(existing_indexes, list):
+                existing_value = "\n".join(str(idx) for idx in existing_indexes)
+            else:
+                existing_value = ""
+            index_names_text = st.text_area(
+                lang["admin_env_pinecone_index_names"],
+                value=existing_value,
+                help=lang["admin_env_pinecone_index_names_help"],
+            )
+            env_doc["pinecone_index_names"] = [
+                seg.strip()
+                for line in index_names_text.splitlines()
+                for seg in line.split(",")
+                if seg.strip()
+            ]
             env_doc["pinecone_namespace"] = st.text_input(
                 lang["admin_env_pinecone_namespace"],
                 value=env_doc.get("pinecone_namespace", ""),
@@ -130,33 +153,7 @@ def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
         # ... (rest of the file is unchanged) ...
         if st.button(lang["admin_env_test_button"]):
             try:
-                settings = AppSettings(
-                    openai_api_key=env_doc.get("openai_api_key", ""),
-                    openai_base_url=(env_doc.get("openai_base_url") or None),
-                    openai_model=env_doc.get("openai_model", "gpt-4o-mini"),
-                    embedding_model=env_doc.get(
-                        "embedding_model", "text-embedding-3-small"
-                    ),
-                    pinecone_api_key=env_doc.get("pinecone_api_key", ""),
-                    pinecone_index_name=(env_doc.get("pinecone_index_name") or None),
-                    pinecone_host=(env_doc.get("pinecone_host") or None),
-                    pinecone_namespace=(env_doc.get("pinecone_namespace") or None),
-                    top_k=int(env_doc.get("top_k", 5)),
-                    temperature=float(env_doc.get("temperature", 0.2)),
-                    max_context_chars=int(env_doc.get("max_context_chars", 8000)),
-                    metadata_text_key=env_doc.get("metadata_text_key", "text"),
-                    metadata_source_key=env_doc.get("metadata_source_key", "source"),
-                    system_prompt=env_doc.get(
-                        "system_prompt", DEFAULT_CHAT_SYSTEM_PROMPT
-                    ),
-                    mongo_uri=env_doc.get("mongo_uri"),
-                    mongo_db=env_doc.get("mongo_db", "rag_chat"),
-                    # --- ADDED NEW AUTH FIELDS TO VALIDATION ---
-                    auth_secret_key=env_doc.get("auth_secret_key"),
-                    auth_cookie_expiry_days=int(
-                        env_doc.get("auth_cookie_expiry_days")
-                    ),
-                )
+                settings = AppSettings.from_env(env_doc)
                 client = get_openai_client(
                     settings.openai_api_key, settings.openai_base_url
                 )
@@ -169,9 +166,12 @@ def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
                 stats = idx.describe_index_stats()
                 st.success(lang["admin_env_test_success"])
                 st.json(stats)
-            except (ValidationError, Exception) as ex:
-                logger.exception(f"Connection test failed: {ex}")
-                st.error(f"{lang['admin_env_test_failed']}: {ex}")
+            except ValidationError as exc:
+                logger.exception("Invalid configuration for connection test")
+                st.error(f"{lang['admin_env_test_failed']}: {exc}")
+            except Exception as exc:  # pragma: no cover - runtime safeguard
+                logger.exception("Connection test failed")
+                st.error(f"{lang['admin_env_test_failed']}: {exc}")
 
     elif admin_sub_view == lang["admin_users"]:
         # ... (rest of the file is unchanged) ...
