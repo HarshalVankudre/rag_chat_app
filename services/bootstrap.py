@@ -6,6 +6,8 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+from dataclasses import dataclass
+from typing import Any, Mapping
 
 from pydantic import ValidationError
 from pymongo import errors as mongo_errors
@@ -29,6 +31,7 @@ class AppBootstrapResult:
 
 def _should_validate_settings(env_doc: Mapping[str, Any]) -> bool:
     """Return True when the provided document contains API credentials."""
+
     required_keys = ("openai_api_key", "pinecone_api_key")
     for key in required_keys:
         value = env_doc.get(key)
@@ -39,6 +42,7 @@ def _should_validate_settings(env_doc: Mapping[str, Any]) -> bool:
 
 def bootstrap_application() -> AppBootstrapResult:
     """Load environment configuration and prepare the MongoDB database."""
+
     env_local = load_env_doc(db=None)
     mongo_client = get_mongo(env_local.get("mongo_uri"))
     db: Database | None = None

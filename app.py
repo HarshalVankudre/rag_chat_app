@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 def configure_page() -> None:
     """Configure the Streamlit page before rendering any UI."""
+
     st.set_page_config(
         page_title=APP_TITLE,
         page_icon="💬",
@@ -40,6 +41,7 @@ def configure_page() -> None:
 
 def initialize_language() -> dict[str, Any]:
     """Persist and resolve the active UI language."""
+
     if "lang_code" not in st.session_state:
         st.session_state["lang_code"] = "en"
 
@@ -59,6 +61,7 @@ def initialize_language() -> dict[str, Any]:
 
 def setup_screen(lang_dict: dict[str, Any]) -> None:
     """First-run setup to enter Mongo URI/DB."""
+
     st.title(lang_dict["setup_title"])
     st.write(lang_dict["setup_descr"])
 
@@ -173,6 +176,69 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
         user_role = _resolve_user_role(db, username)
         st.session_state["is_admin"] = user_role == "admin"
 
+
+    logger.info(
+        "Refreshing authentication credentials cache for database '%s'.",
+        _db.name,
+    )
+    creds = fetch_all_users_for_auth(_db)
+    logger.info("Loaded %d user credential entries.", len(creds.get("usernames", {})))
+    return creds
+
+
+def _resolve_user_role(db: Database, username: str) -> str:
+    """Lookup the latest role for a user."""
+
+    user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
+    return user_doc_live.get("role", "user")
+
+
+def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any]) -> None:
+    """Render the authenticated portion of the UI."""
+
+    db = context.db
+    if db is None:
+        setup_screen(lang)
+        st.stop()
+
+    credentials = get_auth_credentials(db)
+
+    default_key = "your_strong_secret_key_here"
+    secret_key = context.env_doc.get("auth_secret_key", default_key)
+    expiry_days = int(context.env_doc.get("auth_cookie_expiry_days", 30))
+
+    if secret_key == default_key:
+        st.warning(
+            "Warning: Using default auth_secret_key. "
+            "Please set a strong secret key in your environment for security.",
+        )
+
+    authenticator = stauth.Authenticate(
+        credentials,
+        "rag_chat_cookie_v1",
+        secret_key,
+        cookie_expiry_days=expiry_days,
+    )
+
+    st.session_state.setdefault("auth_user", None)
+    st.session_state.setdefault("is_admin", False)
+
+    authenticator.login(
+        fields={
+            "Form name": lang["login_title"],
+            "Username": lang["username"],
+            "Password": lang["password"],
+            "Login": lang["login_button"],
+        },
+    )
+
+    if st.session_state.get("authentication_status"):
+        username = st.session_state["username"]
+        st.session_state["auth_user"] = username
+
+        user_role = _resolve_user_role(db, username)
+        st.session_state["is_admin"] = user_role == "admin"
+
         with st.sidebar:
             st.markdown(f"### {APP_TITLE}")
             admin_label = (
@@ -234,6 +300,7 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
 
 def main() -> None:
     """Entry point used by Streamlit to render the application."""
+
     setup_logging()
     configure_page()
     lang = initialize_language()
