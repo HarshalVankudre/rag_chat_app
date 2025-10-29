@@ -15,6 +15,7 @@ try:
     from docling.document_converter import DocumentConverter
 except ImportError:  # pragma: no cover - optional dependency
     DocumentConverter = None
+from typing import Any, Protocol, runtime_checkable
 
 try:
     from pypdf import PdfReader
@@ -126,6 +127,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         if PdfReader is None:
             raise RuntimeError(PYPDF_MISSING_MSG)
         reader = PdfReader(io.BytesIO(payload))
+        reader = PdfReader(io.BytesIO(uploaded_file.read()))
         units = []
         for i, page in enumerate(reader.pages):
             try:
@@ -146,6 +148,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         if docx is None:
             raise RuntimeError(DOCX_MISSING_MSG)
         document = docx.Document(io.BytesIO(payload))
+        document = docx.Document(io.BytesIO(uploaded_file.read()))
         paras = [p.text for p in document.paragraphs if p.text and p.text.strip()]
         text = "\n".join(paras)
         return [(text, f"{name}")]
