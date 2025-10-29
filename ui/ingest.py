@@ -1,9 +1,14 @@
-# ui/ingest.py
+"""Streamlit panel for document ingestion."""
+
 import logging
-from typing import Any, Dict
+from collections.abc import Mapping
+from typing import Any
 
 import streamlit as st
+from pinecone.core.client.exceptions import PineconeException
 from pydantic import ValidationError
+from pymongo.database import Database
+from pymongo.errors import PyMongoError
 
 from config.env import load_env_doc
 from db.mongo import COL_INGEST
@@ -20,7 +25,10 @@ from rag.pinecone_utils import (
 logger = logging.getLogger(__name__)
 
 
-def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
+def ingest_panel(
+    db: Database | None, env_doc: dict[str, Any], lang: Mapping[str, str]
+) -> None:
+    """Render the ingestion workflow for uploading and indexing documents."""
     st.subheader(lang["ingest_title"])
 
     env_now = load_env_doc(db) if db is not None else env_doc
@@ -43,11 +51,11 @@ def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
             mongo_uri=env_now.get("mongo_uri"),
             mongo_db=env_now.get("mongo_db", "rag_chat"),
         )
-    except ValidationError as e:
-        logger.exception(f"Ingestion panel failed to load settings: {e}")
+    except ValidationError as exc:
+        logger.exception("Ingestion panel failed to load settings")
         st.error(lang["ingest_error_env_not_configured"])
-        st.exception(e)
-        return
+        st.exception(exc)
+        return None
 
     with st.form("ingest_form"):
         files = st.file_uploader(
@@ -103,7 +111,7 @@ def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
                                     md_text_key=settings.metadata_text_key,
                                     md_source_key=settings.metadata_source_key,
                                 )
-                                if rec.get("vector_count", 0) > 0:
+                                if rec.get("vector_count", 0) > 0 and db is not None:
                                     db[COL_INGEST].insert_one(rec)
                                     st.success(
                                         lang["ingest_status_success"].format(
@@ -114,17 +122,17 @@ def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
                                     )
                                 else:
                                     st.warning(
-                                        f"No vectors were generated for {f.name},"
-                                        f" skipping database entry."
+                                        f"No vectors were generated for {f.name}, "
+                                        "skipping database entry."
                                     )
-                        except Exception as exf:
-                            logger.exception(f"Failed to ingest file {f.name}: {exf}")
-                            st.error(f"{lang['ingest_status_failed']}: {exf}")
+                        except (ValueError, RuntimeError, OSError) as file_exc:
+                            logger.exception("Failed to ingest file %s", f.name)
+                            st.error(f"{lang['ingest_status_failed']}: {file_exc}")
                     progress.progress(int(100 * i / len(files)))
                 st.success(lang["ingest_status_done"])
-            except Exception as ex:
-                logger.exception(f"Ingestion process failed: {ex}")
-                st.error(f"{lang['ingest_error_failed']}: {ex}")
+            except (PineconeException, PyMongoError, RuntimeError, ValueError) as exc:
+                logger.exception("Ingestion process failed")
+                st.error(f"{lang['ingest_error_failed']}: {exc}")
 
     st.divider()
     st.markdown(lang["ingest_docs_header"])
@@ -168,13 +176,13 @@ def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
                                 st.experimental_rerun() if hasattr(
                                     st, "experimental_rerun"
                                 ) else st.rerun()
-                            except Exception as exd:
-                                logger.exception(f"Failed to delete vectors: {exd}")
-                                st.error(f"{lang['ingest_delete_failed']}: {exd}")
+                            except (PineconeException, PyMongoError, ValueError) as exc:
+                                logger.exception("Failed to delete vectors")
+                                st.error(f"{lang['ingest_delete_failed']}: {exc}")
                     with col_b:
                         st.caption(lang["ingest_delete_caption"])
             if not found:
                 st.info(lang["ingest_docs_none"])
-        except Exception as e:
-            logger.error(f"Failed to fetch ingested docs from Mongo: {e}")
-            st.error(f"Failed to fetch ingested docs: {e}")
+        except PyMongoError as exc:
+            logger.exception("Failed to fetch ingested docs from Mongo")
+            st.error(f"Failed to fetch ingested docs: {exc}")

@@ -1,9 +1,15 @@
+"""Streamlit chat UI implementation."""
+
+from __future__ import annotations
+
 import logging
 import re
-from typing import Any, Dict, Optional
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 import streamlit as st
 from pydantic import ValidationError
+from pymongo.database import Database
 
 from config.env import load_env_doc
 from db.mongo import (
@@ -36,18 +42,19 @@ LAST_Q_PATTERN = re.compile(
 )
 
 
-def find_last_user_question(history_docs):
+def find_last_user_question(history_docs: Iterable[dict[str, Any]]) -> str | None:
+    """Return the previous user message within the supplied history."""
     if not history_docs:
         return None
-    for msg in reversed(history_docs[:-1]):
+    history_list = list(history_docs)
+    for msg in reversed(history_list[:-1]):
         if msg.get("role") == "user":
             return (msg.get("content") or "").strip()
     return None
 
 
-def conversations_sidebar(db, username: str, lang: dict):
-    """Renders the conversation list and controls in the sidebar.
-    """
+def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) -> None:
+    """Render the conversation list and controls in the sidebar."""
     with st.sidebar:
         st.header(lang["conv_header"])
 
@@ -148,39 +155,35 @@ def conversations_sidebar(db, username: str, lang: dict):
                         st.session_state.pop("confirm_delete_id", None)
                         st.rerun()
 
-                with col2:
-                    with st.popover("...", use_container_width=False):
-                        if st.button(
-                            lang["conv_popover_rename"],
-                            key=f"rename_pop_{c_id}",
-                            use_container_width=True,
-                        ):
-                            st.session_state["editing_conv_id"] = c_id
-                            st.session_state["current_conv_id"] = c_id
-                            st.session_state.pop("confirm_delete_id", None)
-                            st.rerun()
+                with col2, st.popover("...", use_container_width=False):
+                    if st.button(
+                        lang["conv_popover_rename"],
+                        key=f"rename_pop_{c_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["editing_conv_id"] = c_id
+                        st.session_state["current_conv_id"] = c_id
+                        st.session_state.pop("confirm_delete_id", None)
+                        st.rerun()
 
-                        if st.button(
-                            lang["conv_popover_delete"],
-                            key=f"delete_pop_{c_id}",
-                            use_container_width=True,
-                            type="primary",
-                        ):
-                            st.session_state["confirm_delete_id"] = c_id
-                            st.session_state["current_conv_id"] = c_id
-                            st.session_state.pop("editing_conv_id", None)
-                            st.rerun()
-
-
+                    if st.button(
+                        lang["conv_popover_delete"],
+                        key=f"delete_pop_{c_id}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        st.session_state["confirm_delete_id"] = c_id
+                        st.session_state["current_conv_id"] = c_id
+                        st.session_state.pop("editing_conv_id", None)
+                        st.rerun()
 def render_chat_ui(
-    db,
+    db: Database,
     username: str,
-    lang: dict,  # --- ADDED ---
+    lang: Mapping[str, str],
     render_main_chat: bool = True,
     render_conv_sidebar: bool = True,
-) -> Optional[str]:
-    """Renders the chat sidebar, and optionally the main chat message area.
-    """
+) -> str | None:
+    """Render the chat sidebar and optionally the main message area."""
     if render_conv_sidebar:
         conversations_sidebar(db, username, lang)  # --- PASS lang ---
 
@@ -201,19 +204,17 @@ def render_chat_ui(
                 st.markdown(m["content"])
 
     return current_conv_id
-
-
 def process_new_message(
-    db,
-    env_doc: Dict[str, Any],
+    db: Database,
+    env_doc: dict[str, Any],
     username: str,
     current_conv_id: str,
     prompt: str,
-    lang: dict,  # --- ADDED ---
-):
-
+    lang: Mapping[str, str],
+) -> None:
+    """Process a user prompt, generate a response, and persist the interaction."""
     if not prompt or not current_conv_id:
-        return
+        return None
 
     add_message(db, current_conv_id, username, "user", prompt)
     with st.chat_message("user"):
@@ -240,8 +241,8 @@ def process_new_message(
     except ValidationError as e:
         logger.exception(f"Environment settings are invalid: {e}")
         st.error(lang["chat_error_env_not_configured"])
-        st.exception(e)
-        return
+        st.exception(exc)
+        return None
 
     try:
         client = get_openai_client(
@@ -334,7 +335,7 @@ def process_new_message(
         with st.chat_message("assistant"):
             chunks = []
 
-            def gen():
+            def gen() -> Iterator[str]:
                 for t in stream_chat_completion(
                     client, settings.openai_model, messages, settings.temperature
                 ):
@@ -364,8 +365,8 @@ def process_new_message(
                             f"**{i}.** `{src_label}` — score: `{score_s}` — id: `{s.get('id')}`"
                         )
 
-    except Exception as e:
-        logger.exception(f"Error processing new message: {e}")
+    except Exception as exc:  # pragma: no cover - runtime safeguard
+        logger.exception("Error processing new message")
         with st.chat_message("assistant"):
-            st.error(f"{lang['chat_error']}: {e}")
+            st.error(f"{lang['chat_error']}: {exc}")
 
