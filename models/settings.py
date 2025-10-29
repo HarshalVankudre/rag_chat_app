@@ -1,6 +1,10 @@
 # models/settings.py
+import logging
 from typing import Optional
+
 from pydantic import BaseModel, model_validator
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CHAT_SYSTEM_PROMPT = (
     "You are a helpful assistant.\n"
@@ -96,7 +100,9 @@ class AppSettings(BaseModel):
 
         # --- NEW: Check for default secret key ---
         if self.auth_secret_key == "your_strong_secret_key_here":
-            print("Warning: Using default auth_secret_key. Please set a strong secret key in your environment.")
+            logger.warning(
+                "Using default auth_secret_key. Please set a strong secret key in your environment."
+            )
 
         if self.openai_base_url:
             self.openai_base_url = self.openai_base_url.strip() or None
@@ -110,3 +116,4 @@ class AppSettings(BaseModel):
             self.mongo_uri = self.mongo_uri.strip() or None
         self.mongo_db = (self.mongo_db or "rag_chat").strip()
         return self
+

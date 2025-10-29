@@ -1,27 +1,30 @@
+import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 import streamlit as st
 from pydantic import ValidationError
 
-from models.settings import AppSettings, DEFAULT_CHAT_SYSTEM_PROMPT
 from config.env import load_env_doc
 from db.mongo import (
-    list_conversations,
-    create_conversation,
-    rename_conversation,
-    delete_conversation,
     add_message,
+    create_conversation,
+    delete_conversation,
     get_messages,
+    list_conversations,
+    rename_conversation,
 )
+from models.settings import DEFAULT_CHAT_SYSTEM_PROMPT, AppSettings
+from rag.ingest import build_context
 from rag.pinecone_utils import (
+    embed_texts,
     get_openai_client,
     get_pinecone_index,
-    embed_texts,
     retrieve_chunks,
     stream_chat_completion,
 )
-from rag.ingest import build_context
+
+logger = logging.getLogger(__name__)
 
 # ---- Configuration for memory window ----
 MAX_TURNS = 25
@@ -43,8 +46,7 @@ def find_last_user_question(history_docs):
 
 
 def conversations_sidebar(db, username: str, lang: dict):
-    """
-    Renders the conversation list and controls in the sidebar.
+    """Renders the conversation list and controls in the sidebar.
     """
     with st.sidebar:
         st.header(lang["conv_header"])
@@ -83,46 +85,63 @@ def conversations_sidebar(db, username: str, lang: dict):
 
         for c in convs:
             c_id = c["id"]
-            c_title = c.get('title', 'Untitled')
+            c_title = c.get("title", "Untitled")
 
             if editing_id == c_id:
                 with st.form(key=f"form_edit_{c_id}"):
-                    st.text_input(lang["conv_rename_label"], value=c_title, key=f"rename_input_{c_id}")
+                    st.text_input(
+                        lang["conv_rename_label"], value=c_title, key=f"rename_input_{c_id}"
+                    )
                     col_a, col_b = st.columns(2)
-                    if col_a.form_submit_button(lang["conv_save"], use_container_width=True, type="primary"):
+                    if col_a.form_submit_button(
+                        lang["conv_save"], use_container_width=True, type="primary"
+                    ):
                         new_title = st.session_state[f"rename_input_{c_id}"]
                         if new_title.strip():
-                            rename_conversation(db, c_id, username, new_title.strip())
+                            rename_conversation(
+                                db, c_id, username, new_title.strip()
+                            )
                             st.session_state.pop("editing_conv_id", None)
                             st.rerun()
                         else:
                             st.warning(lang["conv_warn_empty_title"])
-                    if col_b.form_submit_button(lang["conv_cancel"], use_container_width=True):
+                    if col_b.form_submit_button(
+                        lang["conv_cancel"], use_container_width=True
+                    ):
                         st.session_state.pop("editing_conv_id", None)
                         st.rerun()
 
             elif confirm_delete_id == c_id:
                 st.error(lang["conv_confirm_delete"].format(c_title=c_title))
                 col_a, col_b = st.columns(2)
-                if col_a.button(lang["conv_delete"].upper(), key=f"confirm_del_btn_{c_id}", use_container_width=True, type="primary"):
+                if col_a.button(
+                    lang["conv_delete"].upper(),
+                    key=f"confirm_del_btn_{c_id}",
+                    use_container_width=True,
+                    type="primary",
+                ):
                     delete_conversation(db, c_id, username)
                     st.session_state.pop("confirm_delete_id", None)
                     if st.session_state.get("current_conv_id") == c_id:
                         st.session_state["current_conv_id"] = None
                     st.rerun()
-                if col_b.button(lang["conv_cancel"], key=f"cancel_del_btn_{c_id}", use_container_width=True):
+                if col_b.button(
+                    lang["conv_cancel"],
+                    key=f"cancel_del_btn_{c_id}",
+                    use_container_width=True,
+                ):
                     st.session_state.pop("confirm_delete_id", None)
                     st.rerun()
 
             else:
                 col1, col2 = st.columns([0.85, 0.15])
                 with col1:
-                    is_active = (c_id == current_conv_id)
+                    is_active = c_id == current_conv_id
                     if st.button(
-                            f"• {c_title[:32]}",
-                            key=f"select_{c_id}",
-                            type=("primary" if is_active else "secondary"),
-                            use_container_width=True
+                        f"• {c_title[:32]}",
+                        key=f"select_{c_id}",
+                        type=("primary" if is_active else "secondary"),
+                        use_container_width=True,
                     ):
                         st.session_state["current_conv_id"] = c_id
                         st.session_state.pop("editing_conv_id", None)
@@ -131,13 +150,22 @@ def conversations_sidebar(db, username: str, lang: dict):
 
                 with col2:
                     with st.popover("...", use_container_width=False):
-                        if st.button(lang["conv_popover_rename"], key=f"rename_pop_{c_id}", use_container_width=True):
+                        if st.button(
+                            lang["conv_popover_rename"],
+                            key=f"rename_pop_{c_id}",
+                            use_container_width=True,
+                        ):
                             st.session_state["editing_conv_id"] = c_id
                             st.session_state["current_conv_id"] = c_id
                             st.session_state.pop("confirm_delete_id", None)
                             st.rerun()
 
-                        if st.button(lang["conv_popover_delete"], key=f"delete_pop_{c_id}", use_container_width=True, type="primary"):
+                        if st.button(
+                            lang["conv_popover_delete"],
+                            key=f"delete_pop_{c_id}",
+                            use_container_width=True,
+                            type="primary",
+                        ):
                             st.session_state["confirm_delete_id"] = c_id
                             st.session_state["current_conv_id"] = c_id
                             st.session_state.pop("editing_conv_id", None)
@@ -145,17 +173,16 @@ def conversations_sidebar(db, username: str, lang: dict):
 
 
 def render_chat_ui(
-        db,
-        username: str,
-        lang: dict, # --- ADDED ---
-        render_main_chat: bool = True,
-        render_conv_sidebar: bool = True
-    ) -> Optional[str]:
-    """
-    Renders the chat sidebar, and optionally the main chat message area.
+    db,
+    username: str,
+    lang: dict,  # --- ADDED ---
+    render_main_chat: bool = True,
+    render_conv_sidebar: bool = True,
+) -> Optional[str]:
+    """Renders the chat sidebar, and optionally the main chat message area.
     """
     if render_conv_sidebar:
-        conversations_sidebar(db, username, lang) # --- PASS lang ---
+        conversations_sidebar(db, username, lang)  # --- PASS lang ---
 
     current_conv_id = st.session_state.get("current_conv_id")
 
@@ -177,22 +204,20 @@ def render_chat_ui(
 
 
 def process_new_message(
-        db,
-        env_doc: Dict[str, Any],
-        username: str,
-        current_conv_id: str,
-        prompt: str,
-        lang: dict # --- ADDED ---
-    ):
-    """
-    Processes a new user prompt, performs RAG, gets a response, and saves to DB.
-    """
+    db,
+    env_doc: Dict[str, Any],
+    username: str,
+    current_conv_id: str,
+    prompt: str,
+    lang: dict,  # --- ADDED ---
+):
+
     if not prompt or not current_conv_id:
         return
 
     add_message(db, current_conv_id, username, "user", prompt)
     with st.chat_message("user"):
-        st.markdown(prompt) # User prompt is NOT translated
+        st.markdown(prompt)  # User prompt is NOT translated
 
     history_docs = get_messages(db, current_conv_id, limit=400)
     history = [{"role": h["role"], "content": h["content"]} for h in history_docs]
@@ -234,16 +259,21 @@ def process_new_message(
             rag_min_score=float(env_doc.get("rag_min_score", 0.0)),
         )
     except ValidationError as e:
+        logger.exception(f"Environment settings are invalid: {e}")
         st.error(lang["chat_error_env_not_configured"])
         st.exception(e)
         return
 
     try:
-        client = get_openai_client(settings.openai_api_key, settings.openai_base_url)
+        client = get_openai_client(
+            settings.openai_api_key, settings.openai_base_url
+        )
 
         qvec = embed_texts(client, [prompt], settings.embedding_model)[0]
         index = get_pinecone_index(
-            settings.pinecone_api_key, settings.pinecone_host, settings.pinecone_index_name
+            settings.pinecone_api_key,
+            settings.pinecone_host,
+            settings.pinecone_index_name,
         )
         res = retrieve_chunks(index, qvec, settings.top_k, settings.pinecone_namespace)
 
@@ -251,15 +281,22 @@ def process_new_message(
         matches = []
         best_score = None
         for m in raw_matches:
-            if isinstance(m, dict): m_norm = m
-            else: m_norm = {"id": getattr(m, "id", None), "score": getattr(m, "score", None), "metadata": getattr(m, "metadata", {})}
+            if isinstance(m, dict):
+                m_norm = m
+            else:
+                m_norm = {
+                    "id": getattr(m, "id", None),
+                    "score": getattr(m, "score", None),
+                    "metadata": getattr(m, "metadata", {}),
+                }
             matches.append(m_norm)
             sc = m_norm.get("score")
             if sc is not None:
                 try:
                     scf = float(sc)
                     best_score = scf if best_score is None else max(best_score, scf)
-                except Exception: pass
+                except (ValueError, TypeError):
+                    pass  # Ignore non-floatable scores
 
         built = build_context(
             matches,
@@ -271,9 +308,9 @@ def process_new_message(
         num_matches = len(matches)
 
         rag_sufficient = (
-                num_matches >= settings.rag_min_matches
-                and len(context_text) >= settings.rag_min_context_chars
-                and (best_score is None or best_score >= settings.rag_min_score)
+            num_matches >= settings.rag_min_matches
+            and len(context_text) >= settings.rag_min_context_chars
+            and (best_score is None or best_score >= settings.rag_min_score)
         )
 
         if rag_sufficient:
@@ -285,7 +322,7 @@ def process_new_message(
                     "content": (
                         "Use the information sources as follows:\n"
                         "- CHAT HISTORY: for conversation continuity.\n"
-                        "- CONTEXT: for factual answers from documents (do not invent citations).\G\n"
+                        "- CONTEXT: for factual answers from documents (do not invent citations).\n"
                         f"CONTEXT:\n{context_text}\n\n"
                         f"USER QUESTION:\n{prompt}\n"
                     ),
@@ -317,28 +354,39 @@ def process_new_message(
 
         with st.chat_message("assistant"):
             chunks = []
+
             def gen():
                 for t in stream_chat_completion(
-                        client, settings.openai_model, messages, settings.temperature
+                    client, settings.openai_model, messages, settings.temperature
                 ):
                     chunks.append(t)
                     yield t
-            full = st.write_stream(gen())
-            if not full: full = "".join(chunks)
 
-            add_message(db, current_conv_id, username, "assistant", full) # AI response is NOT translated
+            full = st.write_stream(gen())
+            if not full:
+                full = "".join(chunks)
+
+            add_message(
+                db, current_conv_id, username, "assistant", full
+            )  # AI response is NOT translated
 
             if show_sources and built["sources"]:
                 with st.expander(lang["chat_sources_expander"]):
                     for i, s in enumerate(built["sources"], start=1):
-                        src_label = s.get("source") or lang["chat_sources_label_no_source"]
+                        src_label = (
+                            s.get("source") or lang["chat_sources_label_no_source"]
+                        )
                         score = s.get("score")
-                        try: score_s = f"{float(score):.4f}" if score is not None else "n/a"
-                        except Exception: score_s = str(score)
+                        try:
+                            score_s = f"{float(score):.4f}" if score is not None else "n/a"
+                        except (ValueError, TypeError):
+                            score_s = str(score)
                         st.markdown(
                             f"**{i}.** `{src_label}` — score: `{score_s}` — id: `{s.get('id')}`"
                         )
 
     except Exception as e:
+        logger.exception(f"Error processing new message: {e}")
         with st.chat_message("assistant"):
             st.error(f"{lang['chat_error']}: {e}")
+

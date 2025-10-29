@@ -14,7 +14,6 @@ en_strings = {
     "setup_error_connect_failed": "Could not connect to MongoDB.\n\n- Check username/password\n- Ensure Atlas Network Access allows this host (Streamlit Cloud egress IPs)\n- Verify the connection string",
     "setup_success": "MongoDB connected. Re-running the app…",
     "setup_caption": "Tip: If Streamlit Cloud can't reach Mongo, check Atlas IP allowlist.",
-
     # app.py (Login)
     "login_title": "🔐 Login",
     "username": "Username",
@@ -24,7 +23,6 @@ en_strings = {
     "login_error_invalid_creds": "Invalid credentials.",
     "login_prompt": "Please enter your username and password",
     "login_error_incorrect": "Username/password is incorrect",
-
     # app.py (Sidebar)
     "sidebar_language": "Language",
     "sidebar_signed_in_as": "Signed in as",
@@ -32,15 +30,12 @@ en_strings = {
     "sidebar_logout": "Log out",
     "sidebar_nav_chat": "💬 Chat",
     "sidebar_nav_admin": "🛡️ Admin",
-
     # ui/admin.py (Sidebar Nav)
     "admin_env": "⚙️ Environment",
     "admin_users": "👥 Users",
     "admin_ingest": "📥 Ingest",
-
     # ui/admin.py (Main)
     "admin_dashboard_title": "🛡️ Admin Dashboard",
-
     # ui/admin.py (Environment Tab)
     "admin_env_subheader": "Environment Settings (stored in MongoDB)",
     "admin_env_openai_api_key": "OpenAI API Key",
@@ -66,7 +61,6 @@ en_strings = {
     "admin_env_test_failed": "Connection test failed",
     "admin_env_auth_secret_key": "Auth Secret Key",
     "admin_env_auth_cookie_expiry": "Auth Cookie Expiry (days)",
-
     # ui/admin.py (Users Tab)
     "admin_users_subheader": "User Management (MongoDB)",
     "admin_users_form_username": "New username",
@@ -88,7 +82,6 @@ en_strings = {
     "admin_users_col_action": "**Action**",
     "admin_users_list_delete_button": "Delete",
     "admin_users_list_delete_success": "Deleted.",
-
     # ui/chat.py (Sidebar)
     "conv_header": "🗂️ Your Conversations",
     "conv_new_chat": "➕ New chat",
@@ -101,7 +94,6 @@ en_strings = {
     "conv_delete": "Delete",
     "conv_popover_rename": "Rename",
     "conv_popover_delete": "Delete",
-
     # ui/chat.py (Main)
     "chat_title": "💬 Chat",
     "chat_input_placeholder": "Ask about your documents or anything...",
@@ -114,7 +106,6 @@ en_strings = {
     "chat_no_info_fallback": "I do not have enough information in the provided documents to answer that.",
     "chat_sources_expander": "🔎 Sources used",
     "chat_sources_label_no_source": "(no source metadata)",
-
     # ui/ingest.py
     "ingest_title": "📥 Upload & Ingest Documents to Pinecone",
     "ingest_error_env_not_configured": "Environment not configured. Open Admin → Environment and save your keys.",
@@ -153,7 +144,6 @@ de_strings = {
     "setup_error_connect_failed": "Verbindung zu MongoDB fehlgeschlagen.\n\n- Benutzername/Passwort prüfen\n- Sicherstellen, dass der Atlas-Netzwerkzugriff diesen Host zulässt\n- Verbindungszeichenfolge überprüfen",
     "setup_success": "MongoDB verbunden. App wird neu gestartet…",
     "setup_caption": "Tipp: Wenn Streamlit Cloud Mongo nicht erreichen kann, überprüfen Sie die Atlas-IP-Positivliste.",
-
     # app.py (Login)
     "login_title": "🔐 Anmelden",
     "username": "Benutzername",
@@ -163,7 +153,6 @@ de_strings = {
     "login_error_invalid_creds": "Ungültige Anmeldeinformationen.",
     "login_prompt": "Bitte geben Sie Ihren Benutzernamen und Ihr Passwort ein",
     "login_error_incorrect": "Benutzername/Passwort ist inkorrekt",
-
     # app.py (Sidebar)
     "sidebar_language": "Sprache",
     "sidebar_signed_in_as": "Angemeldet als",
@@ -171,15 +160,12 @@ de_strings = {
     "sidebar_logout": "Abmelden",
     "sidebar_nav_chat": "💬 Chat",
     "sidebar_nav_admin": "🛡️ Admin",
-
     # ui/admin.py (Sidebar Nav)
     "admin_env": "⚙️ Umgebung",
     "admin_users": "👥 Benutzer",
     "admin_ingest": "📥 Import",
-
     # ui/admin.py (Main)
     "admin_dashboard_title": "🛡️ Admin-Dashboard",
-
     # ui/admin.py (Environment Tab)
     "admin_env_subheader": "Umgebungseinstellungen (in MongoDB gespeichert)",
     "admin_env_openai_api_key": "OpenAI API-Schlüssel",
@@ -205,7 +191,6 @@ de_strings = {
     "admin_env_test_failed": "Verbindungstest fehlgeschlagen",
     "admin_env_auth_secret_key": "Auth Secret-Schlüssel",
     "admin_env_auth_cookie_expiry": "Auth Cookie-Ablauf (Tage)",
-
     # ui/admin.py (Users Tab)
     "admin_users_subheader": "Benutzerverwaltung (MongoDB)",
     "admin_users_form_username": "Neuer Benutzername",
@@ -227,7 +212,6 @@ de_strings = {
     "admin_users_col_action": "**Aktion**",
     "admin_users_list_delete_button": "Löschen",
     "admin_users_list_delete_success": "Gelöscht.",
-
     # ui/chat.py (Sidebar)
     "conv_header": "🗂️ Ihre Unterhaltungen",
     "conv_new_chat": "➕ Neuer Chat",
@@ -240,7 +224,6 @@ de_strings = {
     "conv_delete": "Löschen",
     "conv_popover_rename": "Umbenennen",
     "conv_popover_delete": "Löschen",
-
     # ui/chat.py (Main)
     "chat_title": "💬 Chat",
     "chat_input_placeholder": "Fragen Sie zu Ihren Dokumenten oder etwas anderem...",
@@ -253,7 +236,6 @@ de_strings = {
     "chat_no_info_fallback": "Ich habe nicht genügend Informationen in den bereitgestellten Dokumenten, um das zu beantworten.",
     "chat_sources_expander": "🔎 Verwendete Quellen",
     "chat_sources_label_no_source": "(keine Quell-Metadaten)",
-
     # ui/ingest.py
     "ingest_title": "📥 Dokumente hochladen & in Pinecone importieren",
     "ingest_error_env_not_configured": "Umgebung nicht konfiguriert. Öffnen Sie Admin → Umgebung und speichern Sie Ihre Schlüssel.",
@@ -280,10 +262,9 @@ de_strings = {
 
 
 def get_lang(lang_code: str) -> dict:
-    """
-    Returns the dictionary of strings for the given language code.
+    """Returns the dictionary of strings for the given language code.
     Defaults to English.
     """
-    if lang_code == 'de':
+    if lang_code == "de":
         return de_strings
     return en_strings
