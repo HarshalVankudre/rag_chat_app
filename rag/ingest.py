@@ -8,6 +8,13 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime as dt
 from pathlib import Path
+from tempfile import NamedTemporaryFile
+from typing import Any, Protocol, runtime_checkable
+
+try:
+    from docling.document_converter import DocumentConverter
+except ImportError:  # pragma: no cover - optional dependency
+    DocumentConverter = None
 from typing import Any, Protocol, runtime_checkable
 
 try:
@@ -18,7 +25,7 @@ except ImportError:  # pragma: no cover - optional dependency
     PdfReadError = RuntimeError
 try:
     import docx
-except ImportError:
+except ImportError:  # pragma: no cover - optional dependency
     docx = None
 
 from openai import OpenAI
@@ -31,6 +38,8 @@ from .pinecone_utils import embed_texts
 
 PYPDF_MISSING_MSG = "pypdf is not installed"
 DOCX_MISSING_MSG = "python-docx is not installed"
+DOCLING_MISSING_MSG = "docling is not installed"
+DOCLING_EMPTY_DOC_MSG = "Docling conversion returned no document"
 
 
 @runtime_checkable
@@ -45,21 +54,79 @@ class Uploadable(Protocol):
 
 logger = logging.getLogger(__name__)
 
+_docling_converter: DocumentConverter | None = None
+
+
+def _get_docling_converter() -> DocumentConverter:
+    """Return a shared Docling converter instance."""
+    if DocumentConverter is None:  # pragma: no cover - optional dependency
+        raise RuntimeError(DOCLING_MISSING_MSG)
+
+    global _docling_converter
+    if _docling_converter is None:
+        _docling_converter = DocumentConverter()
+    return _docling_converter
+
+
+def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[str, str]]:
+    """Extract text from arbitrary documents using Docling when available."""
+    converter = _get_docling_converter()
+    with NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as tmp:
+        tmp.write(payload)
+        tmp_path = Path(tmp.name)
+    try:
+        result = converter.convert(tmp_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    document = getattr(result, "document", None)
+    if document is None:
+        raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
+
+    text: str | None = None
+    for attr in ("export_to_markdown", "export_to_text", "export_to_plaintext"):
+        exporter = getattr(document, attr, None)
+        if callable(exporter):
+            try:
+                candidate = exporter()
+            except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive fallback
+                logger.debug("Docling exporter %s failed for %s", attr, name, exc_info=exc)
+                continue
+            if isinstance(candidate, str) and candidate.strip():
+                text = candidate
+                break
+
+    if not text:
+        text = str(document)
+
+    return [(text, f"{name}#docling")]
+
 
 def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
     """Extract text units from an uploaded file for downstream chunking."""
     name = uploaded_file.name
     suffix = Path(name).suffix.lower()
-    if suffix in [".txt", ".md", ".csv", ".log"]:
-        raw = uploaded_file.read()
+    payload = uploaded_file.read() or b""
+
+    if payload and DocumentConverter is not None:
         try:
-            text = raw.decode("utf-8", errors="ignore")
+            return _extract_with_docling(name, suffix, payload)
+        except RuntimeError as exc:
+            logger.info("Docling could not process %s: %s", name, exc)
+        except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive fallback
+            logger.warning("Docling processing crashed for %s", name, exc_info=exc)
+
+    if suffix in [".txt", ".md", ".csv", ".log"]:
+        try:
+            text = payload.decode("utf-8", errors="ignore")
         except UnicodeDecodeError:
-            text = raw.decode("latin-1", errors="ignore")
+            text = payload.decode("latin-1", errors="ignore")
         return [(text, f"{name}")]
+
     if suffix == ".pdf":
         if PdfReader is None:
             raise RuntimeError(PYPDF_MISSING_MSG)
+        reader = PdfReader(io.BytesIO(payload))
         reader = PdfReader(io.BytesIO(uploaded_file.read()))
         units = []
         for i, page in enumerate(reader.pages):
@@ -76,19 +143,21 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
             if page_text.strip():
                 units.append((page_text, f"{name}#page={i+1}"))
         return units or [("", f"{name}")]
+
     if suffix == ".docx":
         if docx is None:
             raise RuntimeError(DOCX_MISSING_MSG)
+        document = docx.Document(io.BytesIO(payload))
         document = docx.Document(io.BytesIO(uploaded_file.read()))
         paras = [p.text for p in document.paragraphs if p.text and p.text.strip()]
         text = "\n".join(paras)
         return [(text, f"{name}")]
+
     # Fallback for unknown types
-    raw = uploaded_file.read()
     try:
-        text = raw.decode("utf-8", errors="ignore")
+        text = payload.decode("utf-8", errors="ignore")
     except UnicodeDecodeError:
-        text = raw.decode("latin-1", errors="ignore")
+        text = payload.decode("latin-1", errors="ignore")
     return [(text, f"{name}")]
 
 
@@ -117,6 +186,11 @@ def build_context(
                 "id": match.get("id"),
                 "score": match.get("score"),
                 "source": str(src) if src else None,
+                "index": (
+                    str(metadata.get("index_name"))
+                    if metadata.get("index_name")
+                    else None
+                ),
             }
         )
     return {"context_text": "\n\n---\n\n".join(contexts), "sources": sources}
@@ -130,6 +204,7 @@ def upsert_chunks(
     filename: str,
     text_units: list[tuple[str, str]],
     namespace: str | None,
+    index_name: str | None,
     chunk_size: int,
     chunk_overlap: int,
     md_text_key: str,
@@ -188,6 +263,7 @@ def upsert_chunks(
                 "filename": filename,
                 "uploaded_at": now,
                 "chunk_index": idx,
+                "index_name": index_name,
             }
         )
         vectors.append({"id": vid, "values": [float(x) for x in embedding], "metadata": meta})
@@ -198,6 +274,7 @@ def upsert_chunks(
         "doc_id": doc_id,
         "filename": filename,
         "namespace": ns,
+        "index_name": index_name,
         "vector_count": len(vectors),
         "vector_ids": vec_ids,
         "uploaded_at": now,
