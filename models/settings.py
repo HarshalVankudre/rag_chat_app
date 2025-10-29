@@ -1,6 +1,9 @@
-# models/settings.py
+"""Application configuration models used across the Streamlit app."""
+
+from __future__ import annotations
+
 import logging
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, model_validator
 
@@ -19,7 +22,9 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
 )
 
 
-def default_env() -> dict:
+def default_env() -> dict[str, Any]:
+    """Return the baseline environment document used throughout the app."""
+
     return {
         "_id": "global",
         # OpenAI
@@ -92,7 +97,8 @@ class AppSettings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_required_keys(self):
-        # ... (rest of the function is unchanged)
+        """Validate secrets and normalise optional string fields."""
+
         if not (self.openai_api_key and self.openai_api_key.strip()):
             raise ValueError("openai_api_key cannot be blank")
         if not (self.pinecone_api_key and self.pinecone_api_key.strip()):
@@ -116,4 +122,33 @@ class AppSettings(BaseModel):
             self.mongo_uri = self.mongo_uri.strip() or None
         self.mongo_db = (self.mongo_db or "rag_chat").strip()
         return self
+
+    @classmethod
+    def from_env(cls, env_doc: Mapping[str, Any]) -> "AppSettings":
+        """Build an :class:`AppSettings` instance from a persisted env document."""
+
+        return cls(
+            openai_api_key=env_doc.get("openai_api_key", ""),
+            openai_base_url=(env_doc.get("openai_base_url") or None),
+            openai_model=env_doc.get("openai_model", "gpt-4o-mini"),
+            embedding_model=env_doc.get("embedding_model", "text-embedding-3-small"),
+            pinecone_api_key=env_doc.get("pinecone_api_key", ""),
+            pinecone_index_name=(env_doc.get("pinecone_index_name") or None),
+            pinecone_host=(env_doc.get("pinecone_host") or None),
+            pinecone_namespace=(env_doc.get("pinecone_namespace") or None),
+            top_k=int(env_doc.get("top_k", 5)),
+            temperature=float(env_doc.get("temperature", 0.2)),
+            max_context_chars=int(env_doc.get("max_context_chars", 8000)),
+            metadata_text_key=env_doc.get("metadata_text_key", "text"),
+            metadata_source_key=env_doc.get("metadata_source_key", "source"),
+            system_prompt=env_doc.get("system_prompt", DEFAULT_CHAT_SYSTEM_PROMPT),
+            mongo_uri=env_doc.get("mongo_uri"),
+            mongo_db=env_doc.get("mongo_db", "rag_chat"),
+            allow_general_answers=env_doc.get("allow_general_answers", True),
+            rag_min_context_chars=int(env_doc.get("rag_min_context_chars", 600)),
+            rag_min_matches=int(env_doc.get("rag_min_matches", 1)),
+            rag_min_score=float(env_doc.get("rag_min_score", 0.0)),
+            auth_secret_key=env_doc.get("auth_secret_key", "your_strong_secret_key_here"),
+            auth_cookie_expiry_days=int(env_doc.get("auth_cookie_expiry_days", 30)),
+        )
 
