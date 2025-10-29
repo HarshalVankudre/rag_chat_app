@@ -1,3 +1,9 @@
+"""Application configuration models and helpers."""
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping
+from typing import Any
 """Application configuration models used across the Streamlit app."""
 
 from __future__ import annotations
@@ -5,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Optional
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +44,7 @@ def default_env() -> dict[str, Any]:
         "pinecone_api_key": "",
         "pinecone_host": "",
         "pinecone_index_name": "",
+        "pinecone_index_names": [],
         "pinecone_namespace": "",
         # Retrieval / generation
         "top_k": 5,
@@ -79,6 +86,7 @@ class AppSettings(BaseModel):
     # Pinecone
     pinecone_api_key: str
     pinecone_index_name: str | None = None
+    pinecone_index_names: list[str] = Field(default_factory=list)
     pinecone_host: str | None = None
     pinecone_namespace: str | None = None
 
@@ -107,6 +115,8 @@ class AppSettings(BaseModel):
     auth_cookie_expiry_days: int = 30
 
     @model_validator(mode="after")
+    def _validate_required_keys(self) -> AppSettings:
+        """Validate secrets and normalise optional string fields."""
     def _validate_required_keys(self):
         """Validate secrets and normalise optional string fields."""
 
@@ -129,12 +139,40 @@ class AppSettings(BaseModel):
             self.pinecone_host = self.pinecone_host.strip() or None
         if self.pinecone_namespace:
             self.pinecone_namespace = self.pinecone_namespace.strip() or None
+
+        cleaned_indexes: list[str] = []
+        seen: set[str] = set()
+        for raw in self.pinecone_index_names:
+            candidate = str(raw).strip()
+            if candidate and candidate not in seen:
+                cleaned_indexes.append(candidate)
+                seen.add(candidate)
+        self.pinecone_index_names = cleaned_indexes
+
+        if not self.pinecone_index_name and self.pinecone_index_names:
+            self.pinecone_index_name = self.pinecone_index_names[0]
         if self.mongo_uri:
             self.mongo_uri = self.mongo_uri.strip() or None
         self.mongo_db = (self.mongo_db or "rag_chat").strip()
         return self
 
     @classmethod
+    def from_env(cls, env_doc: Mapping[str, Any]) -> AppSettings:
+        """Build an :class:`AppSettings` instance from a persisted env document."""
+        raw_indexes = env_doc.get("pinecone_index_names", [])
+        if isinstance(raw_indexes, str):
+            raw_indexes = [
+                seg.strip()
+                for chunk in raw_indexes.splitlines()
+                for seg in chunk.split(",")
+                if seg.strip()
+            ]
+        elif isinstance(raw_indexes, list):
+            raw_indexes = list(raw_indexes)
+        elif raw_indexes:
+            raw_indexes = [str(raw_indexes)]
+        else:
+            raw_indexes = []
     def from_env(cls, env_doc: Mapping[str, Any]) -> "AppSettings":
         """Build an :class:`AppSettings` instance from a persisted env document."""
 
@@ -145,6 +183,7 @@ class AppSettings(BaseModel):
             embedding_model=env_doc.get("embedding_model", "text-embedding-3-small"),
             pinecone_api_key=env_doc.get("pinecone_api_key", ""),
             pinecone_index_name=(env_doc.get("pinecone_index_name") or None),
+            pinecone_index_names=[str(item) for item in raw_indexes],
             pinecone_host=(env_doc.get("pinecone_host") or None),
             pinecone_namespace=(env_doc.get("pinecone_namespace") or None),
             top_k=int(env_doc.get("top_k", 5)),

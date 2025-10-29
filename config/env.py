@@ -29,6 +29,7 @@ _ENV_MAP: Mapping[str, str] = {
     "pinecone_api_key": "PINECONE_API_KEY",
     "pinecone_host": "PINECONE_HOST",
     "pinecone_index_name": "PINECONE_INDEX_NAME",
+    "pinecone_index_names": "PINECONE_INDEX_NAMES",
     "pinecone_namespace": "PINECONE_NAMESPACE",
     "mongo_uri": "MONGO_URI",
     "mongo_db": "MONGO_DB",
@@ -41,6 +42,16 @@ def _overrides_from_os_env() -> dict[str, Any]:
     for key, env_key in _ENV_MAP.items():
         value = os.getenv(env_key)
         if value is not None and str(value).strip():
+            if key == "pinecone_index_names":
+                parts = [
+                    seg.strip()
+                    for chunk in str(value).splitlines()
+                    for seg in chunk.split(",")
+                    if seg.strip()
+                ]
+                out[key] = parts
+            else:
+                out[key] = str(value).strip()
             out[key] = str(value).strip()
     return out
 

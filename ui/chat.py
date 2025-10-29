@@ -25,8 +25,8 @@ from rag.ingest import build_context
 from rag.pinecone_utils import (
     embed_texts,
     get_openai_client,
-    get_pinecone_index,
-    retrieve_chunks,
+    get_pinecone_indexes,
+    retrieve_from_indexes,
     stream_chat_completion,
 )
 
@@ -238,6 +238,8 @@ def process_new_message(
     env_doc = load_env_doc(db) if db is not None else env_doc
     try:
         settings = AppSettings.from_env(env_doc)
+    except ValidationError as exc:
+        logger.exception("Environment settings are invalid")
     except ValidationError as e:
         logger.exception(f"Environment settings are invalid: {e}")
         st.error(lang["chat_error_env_not_configured"])
@@ -250,33 +252,25 @@ def process_new_message(
         )
 
         qvec = embed_texts(client, [prompt], settings.embedding_model)[0]
-        index = get_pinecone_index(
+        indexes = get_pinecone_indexes(
             settings.pinecone_api_key,
             settings.pinecone_host,
             settings.pinecone_index_name,
+            settings.pinecone_index_names,
         )
-        res = retrieve_chunks(index, qvec, settings.top_k, settings.pinecone_namespace)
-
-        raw_matches = getattr(res, "matches", None) or []
-        matches = []
+        matches = retrieve_from_indexes(
+            indexes, qvec, settings.top_k, settings.pinecone_namespace
+        )
         best_score = None
-        for m in raw_matches:
-            if isinstance(m, dict):
-                m_norm = m
-            else:
-                m_norm = {
-                    "id": getattr(m, "id", None),
-                    "score": getattr(m, "score", None),
-                    "metadata": getattr(m, "metadata", {}),
-                }
-            matches.append(m_norm)
-            sc = m_norm.get("score")
-            if sc is not None:
-                try:
-                    scf = float(sc)
-                    best_score = scf if best_score is None else max(best_score, scf)
-                except (ValueError, TypeError):
-                    pass  # Ignore non-floatable scores
+        for match in matches:
+            sc = match.get("score")
+            if sc is None:
+                continue
+            try:
+                scf = float(sc)
+                best_score = scf if best_score is None else max(best_score, scf)
+            except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+                continue
 
         built = build_context(
             matches,
@@ -361,9 +355,17 @@ def process_new_message(
                             score_s = f"{float(score):.4f}" if score is not None else "n/a"
                         except (ValueError, TypeError):
                             score_s = str(score)
-                        st.markdown(
-                            f"**{i}.** `{src_label}` — score: `{score_s}` — id: `{s.get('id')}`"
+                        index_label = s.get("index")
+                        index_fragment = (
+                            f" — {lang['chat_sources_index_label']}: `{index_label}`"
+                            if index_label
+                            else ""
                         )
+                        source_line = (
+                            f"**{i}.** `{src_label}` — score: `{score_s}` — id: `{s.get('id')}`"
+                            f"{index_fragment}"
+                        )
+                        st.markdown(source_line)
 
     except Exception as exc:  # pragma: no cover - runtime safeguard
         logger.exception("Error processing new message")

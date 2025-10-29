@@ -12,7 +12,7 @@ from pymongo.errors import PyMongoError
 
 from config.env import load_env_doc
 from db.mongo import COL_INGEST
-from models.settings import DEFAULT_CHAT_SYSTEM_PROMPT, AppSettings
+from models.settings import AppSettings
 from rag.ingest import (
     extract_text_units,
     upsert_chunks,
@@ -33,6 +33,8 @@ def ingest_panel(
 
     env_now = load_env_doc(db) if db is not None else env_doc
     try:
+        settings = AppSettings.from_env(env_now)
+    except (ValidationError, ValueError) as exc:
         settings = AppSettings(
             openai_api_key=env_now.get("openai_api_key", ""),
             openai_base_url=(env_now.get("openai_base_url") or None),
@@ -57,6 +59,10 @@ def ingest_panel(
         st.exception(exc)
         return None
 
+    available_indexes = settings.pinecone_index_names
+    index_hint = ", ".join(available_indexes)
+    default_index_value = settings.pinecone_index_name or ""
+
     with st.form("ingest_form"):
         files = st.file_uploader(
             lang["ingest_file_uploader"],
@@ -65,6 +71,17 @@ def ingest_panel(
         )
         ns_override = st.text_input(
             lang["ingest_namespace_label"], value=env_now.get("pinecone_namespace", "")
+        )
+        index_help = (
+            lang["ingest_target_index_help"].format(index_list=index_hint)
+            if index_hint
+            else lang["ingest_target_index_help_empty"]
+        )
+        target_index_input = st.text_input(
+            lang["ingest_target_index_label"],
+            value=default_index_value,
+            help=(lang["ingest_target_index_help_host"] if settings.pinecone_host else index_help),
+            disabled=bool(settings.pinecone_host),
         )
         chunk_size = st.number_input(lang["ingest_chunk_size"], 300, 4000, 1000, 100)
         chunk_overlap = st.number_input(
@@ -77,6 +94,7 @@ def ingest_panel(
         if not files:
             st.warning(lang["ingest_warn_no_files"])
         else:
+            target_index = (target_index_input or default_index_value or "").strip() or None
             try:
                 client = get_openai_client(
                     settings.openai_api_key, settings.openai_base_url
@@ -84,7 +102,7 @@ def ingest_panel(
                 index = get_pinecone_index(
                     settings.pinecone_api_key,
                     settings.pinecone_host,
-                    settings.pinecone_index_name,
+                    target_index,
                 )
                 ns = (ns_override or settings.pinecone_namespace or "__default__").strip()
                 progress = st.progress(0)
@@ -106,6 +124,7 @@ def ingest_panel(
                                     filename=f.name,
                                     text_units=units,
                                     namespace=ns,
+                                    index_name=target_index,
                                     chunk_size=int(chunk_size),
                                     chunk_overlap=int(chunk_overlap),
                                     md_text_key=settings.metadata_text_key,
@@ -164,7 +183,8 @@ def ingest_panel(
                                 index = get_pinecone_index(
                                     settings.pinecone_api_key,
                                     settings.pinecone_host,
-                                    settings.pinecone_index_name,
+                                    rec.get("index_name")
+                                    or settings.pinecone_index_name,
                                 )
                                 vec_ids = rec.get("vector_ids") or []
                                 if vec_ids:
