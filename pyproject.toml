@@ -20,8 +20,6 @@ bcrypt = ">=4.0.0"
 # Switched from pinecone-client to pinecone
 pinecone = "^5.0.0"
 # Added windows-specific dependency for pinecone
-"pyreadline3; sys_platform == 'win32'" = "*"
-
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
