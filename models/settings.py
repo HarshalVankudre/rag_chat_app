@@ -14,6 +14,7 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
     "- If you truly don't know, say so clearly.\n"
 )
 
+
 def default_env() -> dict:
     return {
         "_id": "global",
@@ -37,12 +38,16 @@ def default_env() -> dict:
         # Mongo
         "mongo_uri": "mongodb+srv://harshalvankudre_db_user:<db_password>@chatbot-1.acaznw5.mongodb.net/?appName=chatbot-1",
         "mongo_db": "rag_chat",
-        # NEW knobs for RAG vs general fallback
+        # RAG vs general fallback
         "allow_general_answers": True,
-        "rag_min_context_chars": 600,  # if built context shorter than this → use general fallback
-        "rag_min_matches": 1,          # minimum matches required
-        "rag_min_score": 0.0,          # optional score gate
+        "rag_min_context_chars": 600,
+        "rag_min_matches": 1,
+        "rag_min_score": 0.0,
+        # --- NEW: Auth settings ---
+        "auth_secret_key": "your_strong_secret_key_here",  # IMPORTANT: Change this in your env
+        "auth_cookie_expiry_days": 30,
     }
+
 
 class AppSettings(BaseModel):
     # OpenAI
@@ -77,16 +82,22 @@ class AppSettings(BaseModel):
     rag_min_matches: int = 1
     rag_min_score: float = 0.0
 
-    # ---- Pydantic v2-friendly validation (no field_validator needed) ----
+    # --- NEW: Auth settings ---
+    auth_secret_key: str = "your_strong_secret_key_here"
+    auth_cookie_expiry_days: int = 30
+
     @model_validator(mode="after")
     def _validate_required_keys(self):
-        # Only enforce these when this config is actually used (e.g., in Chat/Test)
-        # Strip and ensure non-empty
+        # ... (rest of the function is unchanged)
         if not (self.openai_api_key and self.openai_api_key.strip()):
             raise ValueError("openai_api_key cannot be blank")
         if not (self.pinecone_api_key and self.pinecone_api_key.strip()):
             raise ValueError("pinecone_api_key cannot be blank")
-        # Normalize strings
+
+        # --- NEW: Check for default secret key ---
+        if self.auth_secret_key == "your_strong_secret_key_here":
+            print("Warning: Using default auth_secret_key. Please set a strong secret key in your environment.")
+
         if self.openai_base_url:
             self.openai_base_url = self.openai_base_url.strip() or None
         if self.pinecone_index_name:

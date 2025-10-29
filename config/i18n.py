@@ -1,0 +1,289 @@
+# config/i18n.py
+
+# --- English Strings ---
+en_strings = {
+    # app.py (Setup)
+    "setup_title": "🛠️ First-run setup: MongoDB",
+    "setup_descr": "Enter your MongoDB connection string and database name. Values are stored in Mongo (collection `env`) after a successful connect.",
+    "setup_mongo_uri": "Mongo URI",
+    "setup_mongo_uri_placeholder": "mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority&appName=chatbot",
+    "setup_mongo_uri_help": "The value is masked and not displayed back. It will be saved to Mongo after connection.",
+    "setup_mongo_db": "Mongo DB name",
+    "setup_button": "💾 Save & Connect",
+    "setup_error_no_uri": "Please paste a Mongo URI.",
+    "setup_error_connect_failed": "Could not connect to MongoDB.\n\n- Check username/password\n- Ensure Atlas Network Access allows this host (Streamlit Cloud egress IPs)\n- Verify the connection string",
+    "setup_success": "MongoDB connected. Re-running the app…",
+    "setup_caption": "Tip: If Streamlit Cloud can't reach Mongo, check Atlas IP allowlist.",
+
+    # app.py (Login)
+    "login_title": "🔐 Login",
+    "username": "Username",
+    "password": "Password",
+    "login_button": "Sign in",
+    "login_error_no_db": "MongoDB is not configured yet.",
+    "login_error_invalid_creds": "Invalid credentials.",
+    "login_prompt": "Please enter your username and password",
+    "login_error_incorrect": "Username/password is incorrect",
+
+    # app.py (Sidebar)
+    "sidebar_language": "Language",
+    "sidebar_signed_in_as": "Signed in as",
+    "sidebar_admin": "admin",
+    "sidebar_logout": "Log out",
+    "sidebar_nav_chat": "💬 Chat",
+    "sidebar_nav_admin": "🛡️ Admin",
+
+    # ui/admin.py (Sidebar Nav)
+    "admin_env": "⚙️ Environment",
+    "admin_users": "👥 Users",
+    "admin_ingest": "📥 Ingest",
+
+    # ui/admin.py (Main)
+    "admin_dashboard_title": "🛡️ Admin Dashboard",
+
+    # ui/admin.py (Environment Tab)
+    "admin_env_subheader": "Environment Settings (stored in MongoDB)",
+    "admin_env_openai_api_key": "OpenAI API Key",
+    "admin_env_openai_base_url": "OpenAI Base URL (optional)",
+    "admin_env_openai_model": "Chat model",
+    "admin_env_embedding_model": "Embedding model",
+    "admin_env_pinecone_api_key": "Pinecone API Key",
+    "admin_env_pinecone_host": "Pinecone Host (recommended)",
+    "admin_env_pinecone_index_name": "Pinecone Index name (dev)",
+    "admin_env_pinecone_namespace": "Default Namespace",
+    "admin_env_top_k": "Top K",
+    "admin_env_temperature": "Temperature",
+    "admin_env_max_context_chars": "Max context chars",
+    "admin_env_metadata_text_key": "Metadata key: chunk text",
+    "admin_env_metadata_source_key": "Metadata key: source",
+    "admin_env_system_prompt": "System prompt",
+    "admin_env_mongo_uri": "Mongo URI",
+    "admin_env_mongo_db": "Mongo DB name",
+    "admin_env_save_button": "💾 Save settings",
+    "admin_env_save_success": "Saved to Mongo.",
+    "admin_env_test_button": "🔌 Test connections",
+    "admin_env_test_success": "✅ OpenAI + Pinecone connections look good!",
+    "admin_env_test_failed": "Connection test failed",
+    "admin_env_auth_secret_key": "Auth Secret Key",
+    "admin_env_auth_cookie_expiry": "Auth Cookie Expiry (days)",
+
+    # ui/admin.py (Users Tab)
+    "admin_users_subheader": "User Management (MongoDB)",
+    "admin_users_form_username": "New username",
+    "admin_users_form_email": "New user email",
+    "admin_users_form_password": "New password",
+    "admin_users_form_role": "Role",
+    "admin_users_form_role_user": "user",
+    "admin_users_form_role_admin": "admin",
+    "admin_users_form_add_button": "➕ Add user",
+    "admin_users_form_warn_all_fields": "Provide username, email, and password.",
+    "admin_users_form_warn_user_exists": "User already exists.",
+    "admin_users_form_add_success": "User '{new_u}' added.",
+    "admin_users_form_add_failed": "Failed",
+    "admin_users_list_header": "### Current users",
+    "admin_users_col_username": "**Username**",
+    "admin_users_col_email": "**Email**",
+    "admin_users_col_role": "**Role**",
+    "admin_users_col_created": "**Created**",
+    "admin_users_col_action": "**Action**",
+    "admin_users_list_delete_button": "Delete",
+    "admin_users_list_delete_success": "Deleted.",
+
+    # ui/chat.py (Sidebar)
+    "conv_header": "🗂️ Your Conversations",
+    "conv_new_chat": "➕ New chat",
+    "conv_no_convs": "No conversations yet.",
+    "conv_rename_label": "Rename:",
+    "conv_save": "Save",
+    "conv_cancel": "Cancel",
+    "conv_warn_empty_title": "Title cannot be empty",
+    "conv_confirm_delete": "Delete '{c_title}'?",
+    "conv_delete": "Delete",
+    "conv_popover_rename": "Rename",
+    "conv_popover_delete": "Delete",
+
+    # ui/chat.py (Main)
+    "chat_title": "💬 Chat",
+    "chat_input_placeholder": "Ask about your documents or anything...",
+    "chat_no_conv_selected": "Select a conversation or start a new one.",
+    "chat_reload_convs": "Reload conversations",
+    "chat_last_q_prefix": "Your last question was:\n\n> {last_q}",
+    "chat_last_q_not_found": "I could not find a previous question.",
+    "chat_error_env_not_configured": "Environment not configured. Open Admin → Environment and save your keys.",
+    "chat_error": "Error",
+    "chat_no_info_fallback": "I do not have enough information in the provided documents to answer that.",
+    "chat_sources_expander": "🔎 Sources used",
+    "chat_sources_label_no_source": "(no source metadata)",
+
+    # ui/ingest.py
+    "ingest_title": "📥 Upload & Ingest Documents to Pinecone",
+    "ingest_error_env_not_configured": "Environment not configured. Open Admin → Environment and save your keys.",
+    "ingest_file_uploader": "Choose documents",
+    "ingest_namespace_label": "Namespace (leave blank to use default)",
+    "ingest_chunk_size": "Chunk size",
+    "ingest_chunk_overlap": "Chunk overlap",
+    "ingest_submit_button": "🚀 Embed & Upsert",
+    "ingest_warn_no_files": "Select files first.",
+    "ingest_status_ingesting": "Ingesting **{f_name}** …",
+    "ingest_status_no_text": "No text found; skipping.",
+    "ingest_status_success": "Uploaded {rec_vector_count} chunks to `{rec_namespace}` (doc_id: `{rec_doc_id}`)",
+    "ingest_status_failed": "Failed",
+    "ingest_status_done": "✅ Done",
+    "ingest_error_failed": "Ingestion failed",
+    "ingest_docs_header": "### 📚 Ingested documents",
+    "ingest_docs_expander_label": "📄 {filename} • ns={namespace} • vectors={vector_count}",
+    "ingest_delete_button": "🗑️ Delete vectors",
+    "ingest_delete_success": "Vectors deleted and manifest removed.",
+    "ingest_delete_failed": "Delete failed",
+    "ingest_delete_caption": "Deletes the vectors from Pinecone and removes this manifest entry.",
+    "ingest_docs_none": "No ingested documents yet. Upload some above.",
+}
+
+# --- German Strings ---
+de_strings = {
+    # app.py (Setup)
+    "setup_title": "🛠️ Ersteinrichtung: MongoDB",
+    "setup_descr": "Geben Sie Ihre MongoDB-Verbindungszeichenfolge und Ihren Datenbanknamen ein. Die Werte werden nach erfolgreicher Verbindung in Mongo (Sammlung `env`) gespeichert.",
+    "setup_mongo_uri": "Mongo-URI",
+    "setup_mongo_uri_placeholder": "mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority&appName=chatbot",
+    "setup_mongo_uri_help": "Der Wert wird maskiert und nicht zurückangezeigt. Er wird nach der Verbindung in Mongo gespeichert.",
+    "setup_mongo_db": "Mongo DB-Name",
+    "setup_button": "💾 Speichern & Verbinden",
+    "setup_error_no_uri": "Bitte fügen Sie eine Mongo-URI ein.",
+    "setup_error_connect_failed": "Verbindung zu MongoDB fehlgeschlagen.\n\n- Benutzername/Passwort prüfen\n- Sicherstellen, dass der Atlas-Netzwerkzugriff diesen Host zulässt\n- Verbindungszeichenfolge überprüfen",
+    "setup_success": "MongoDB verbunden. App wird neu gestartet…",
+    "setup_caption": "Tipp: Wenn Streamlit Cloud Mongo nicht erreichen kann, überprüfen Sie die Atlas-IP-Positivliste.",
+
+    # app.py (Login)
+    "login_title": "🔐 Anmelden",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "login_button": "Anmelden",
+    "login_error_no_db": "MongoDB ist noch nicht konfiguriert.",
+    "login_error_invalid_creds": "Ungültige Anmeldeinformationen.",
+    "login_prompt": "Bitte geben Sie Ihren Benutzernamen und Ihr Passwort ein",
+    "login_error_incorrect": "Benutzername/Passwort ist inkorrekt",
+
+    # app.py (Sidebar)
+    "sidebar_language": "Sprache",
+    "sidebar_signed_in_as": "Angemeldet als",
+    "sidebar_admin": "Admin",
+    "sidebar_logout": "Abmelden",
+    "sidebar_nav_chat": "💬 Chat",
+    "sidebar_nav_admin": "🛡️ Admin",
+
+    # ui/admin.py (Sidebar Nav)
+    "admin_env": "⚙️ Umgebung",
+    "admin_users": "👥 Benutzer",
+    "admin_ingest": "📥 Import",
+
+    # ui/admin.py (Main)
+    "admin_dashboard_title": "🛡️ Admin-Dashboard",
+
+    # ui/admin.py (Environment Tab)
+    "admin_env_subheader": "Umgebungseinstellungen (in MongoDB gespeichert)",
+    "admin_env_openai_api_key": "OpenAI API-Schlüssel",
+    "admin_env_openai_base_url": "OpenAI Basis-URL (optional)",
+    "admin_env_openai_model": "Chat-Modell",
+    "admin_env_embedding_model": "Embedding-Modell",
+    "admin_env_pinecone_api_key": "Pinecone API-Schlüssel",
+    "admin_env_pinecone_host": "Pinecone-Host (empfohlen)",
+    "admin_env_pinecone_index_name": "Pinecone-Indexname (dev)",
+    "admin_env_pinecone_namespace": "Standard-Namespace",
+    "admin_env_top_k": "Top K",
+    "admin_env_temperature": "Temperatur",
+    "admin_env_max_context_chars": "Max. Kontextzeichen",
+    "admin_env_metadata_text_key": "Metadatenschlüssel: Chunk-Text",
+    "admin_env_metadata_source_key": "Metadatenschlüssel: Quelle",
+    "admin_env_system_prompt": "System-Prompt",
+    "admin_env_mongo_uri": "Mongo-URI",
+    "admin_env_mongo_db": "Mongo DB-Name",
+    "admin_env_save_button": "💾 Einstellungen speichern",
+    "admin_env_save_success": "In Mongo gespeichert.",
+    "admin_env_test_button": "🔌 Verbindungen testen",
+    "admin_env_test_success": "✅ OpenAI + Pinecone-Verbindungen sehen gut aus!",
+    "admin_env_test_failed": "Verbindungstest fehlgeschlagen",
+    "admin_env_auth_secret_key": "Auth Secret-Schlüssel",
+    "admin_env_auth_cookie_expiry": "Auth Cookie-Ablauf (Tage)",
+
+    # ui/admin.py (Users Tab)
+    "admin_users_subheader": "Benutzerverwaltung (MongoDB)",
+    "admin_users_form_username": "Neuer Benutzername",
+    "admin_users_form_email": "Neue Benutzer-E-Mail",
+    "admin_users_form_password": "Neues Passwort",
+    "admin_users_form_role": "Rolle",
+    "admin_users_form_role_user": "Benutzer",
+    "admin_users_form_role_admin": "Admin",
+    "admin_users_form_add_button": "➕ Benutzer hinzufügen",
+    "admin_users_form_warn_all_fields": "Benutzername, E-Mail und Passwort angeben.",
+    "admin_users_form_warn_user_exists": "Benutzer existiert bereits.",
+    "admin_users_form_add_success": "Benutzer '{new_u}' hinzugefügt.",
+    "admin_users_form_add_failed": "Fehlgeschlagen",
+    "admin_users_list_header": "### Aktuelle Benutzer",
+    "admin_users_col_username": "**Benutzername**",
+    "admin_users_col_email": "**E-Mail**",
+    "admin_users_col_role": "**Rolle**",
+    "admin_users_col_created": "**Erstellt**",
+    "admin_users_col_action": "**Aktion**",
+    "admin_users_list_delete_button": "Löschen",
+    "admin_users_list_delete_success": "Gelöscht.",
+
+    # ui/chat.py (Sidebar)
+    "conv_header": "🗂️ Ihre Unterhaltungen",
+    "conv_new_chat": "➕ Neuer Chat",
+    "conv_no_convs": "Noch keine Unterhaltungen.",
+    "conv_rename_label": "Umbenennen:",
+    "conv_save": "Speichern",
+    "conv_cancel": "Abbrechen",
+    "conv_warn_empty_title": "Titel darf nicht leer sein",
+    "conv_confirm_delete": "'{c_title}' löschen?",
+    "conv_delete": "Löschen",
+    "conv_popover_rename": "Umbenennen",
+    "conv_popover_delete": "Löschen",
+
+    # ui/chat.py (Main)
+    "chat_title": "💬 Chat",
+    "chat_input_placeholder": "Fragen Sie zu Ihren Dokumenten oder etwas anderem...",
+    "chat_no_conv_selected": "Wählen Sie eine Unterhaltung aus oder starten Sie eine neue.",
+    "chat_reload_convs": "Unterhaltungen neu laden",
+    "chat_last_q_prefix": "Ihre letzte Frage war:\n\n> {last_q}",
+    "chat_last_q_not_found": "Ich konnte keine vorherige Frage finden.",
+    "chat_error_env_not_configured": "Umgebung nicht konfiguriert. Öffnen Sie Admin → Umgebung und speichern Sie Ihre Schlüssel.",
+    "chat_error": "Fehler",
+    "chat_no_info_fallback": "Ich habe nicht genügend Informationen in den bereitgestellten Dokumenten, um das zu beantworten.",
+    "chat_sources_expander": "🔎 Verwendete Quellen",
+    "chat_sources_label_no_source": "(keine Quell-Metadaten)",
+
+    # ui/ingest.py
+    "ingest_title": "📥 Dokumente hochladen & in Pinecone importieren",
+    "ingest_error_env_not_configured": "Umgebung nicht konfiguriert. Öffnen Sie Admin → Umgebung und speichern Sie Ihre Schlüssel.",
+    "ingest_file_uploader": "Dokumente auswählen",
+    "ingest_namespace_label": "Namespace (leer lassen für Standard)",
+    "ingest_chunk_size": "Chunk-Größe",
+    "ingest_chunk_overlap": "Chunk-Überlappung",
+    "ingest_submit_button": "🚀 Einbetten & Hochladen",
+    "ingest_warn_no_files": "Wählen Sie zuerst Dateien aus.",
+    "ingest_status_ingesting": "Importiere **{f_name}** …",
+    "ingest_status_no_text": "Kein Text gefunden; wird übersprungen.",
+    "ingest_status_success": "{rec_vector_count} Chunks nach `{rec_namespace}` hochgeladen (doc_id: `{rec_doc_id}`)",
+    "ingest_status_failed": "Fehlgeschlagen",
+    "ingest_status_done": "✅ Fertig",
+    "ingest_error_failed": "Import fehlgeschlagen",
+    "ingest_docs_header": "### 📚 Importierte Dokumente",
+    "ingest_docs_expander_label": "📄 {filename} • ns={namespace} • Vektoren={vector_count}",
+    "ingest_delete_button": "🗑️ Vektoren löschen",
+    "ingest_delete_success": "Vektoren gelöscht und Manifest entfernt.",
+    "ingest_delete_failed": "Löschen fehlgeschlagen",
+    "ingest_delete_caption": "Löscht die Vektoren aus Pinecone und entfernt diesen Manifesteintrag.",
+    "ingest_docs_none": "Noch keine importierten Dokumente. Laden Sie oben welche hoch.",
+}
+
+
+def get_lang(lang_code: str) -> dict:
+    """
+    Returns the dictionary of strings for the given language code.
+    Defaults to English.
+    """
+    if lang_code == 'de':
+        return de_strings
+    return en_strings

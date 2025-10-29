@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from pymongo import MongoClient, ASCENDING
 from bson import ObjectId
 import hashlib
+import streamlit_authenticator as stauth
 
 COL_USERS = "users"
 COL_ENV = "env"
@@ -25,17 +26,42 @@ def get_mongo(uri: Optional[str]):
 
 def ensure_indexes(db):
     db[COL_USERS].create_index([("username", ASCENDING)], unique=True)
+    db[COL_USERS].create_index([("email", ASCENDING)], unique=True)
     db[COL_CONV].create_index([("user", ASCENDING), ("created_at", ASCENDING)])
     db[COL_MSG].create_index([("conv_id", ASCENDING), ("created_at", ASCENDING)])
 
-def seed_admin_if_empty(db):
-    if db[COL_USERS].count_documents({}) == 0:
+# --- UPDATED FUNCTION ---
+def seed_admin_if_empty(db) -> str:
+    """Checks if the user collection is empty and seeds an admin user if it is. Returns a status message."""
+    count = db[COL_USERS].count_documents({})
+    if count == 0:
+        # --- THIS LINE IS THE FIX ---
+        hashed_password = stauth.Hasher().hash("password 123")
+        # ---------------------------
         db[COL_USERS].insert_one({
             "username": "admin",
-            "password_hash": sha256("password 123"),
+            "password_hash": hashed_password,
             "role": "admin",
+            "email": "admin@example.com",
             "created_at": dt.datetime.utcnow().isoformat() + "Z",
         })
+        return "User collection was empty. Seeded default 'admin' user."
+    else:
+        return f"User collection not empty (found {count} users). Skipping seed."
+
+def fetch_all_users_for_auth(db) -> dict:
+    """Fetches users and formats them for streamlit-authenticator."""
+    credentials = {"usernames": {}}
+    users = db[COL_USERS].find({})
+    for user in users:
+        username = user["username"]
+        credentials["usernames"][username] = {
+            "name": user.get("email", username),
+            "email": user.get("email", ""),
+            "password": user.get("password_hash", ""),
+            "role": user.get("role", "user")
+        }
+    return credentials
 
 def list_conversations(db, username: str) -> List[Dict[str, Any]]:
     convs = list(db[COL_CONV].find({"user": username}).sort("updated_at", -1))
@@ -68,25 +94,28 @@ def get_messages(db, conv_id: str, limit: int = 80) -> List[Dict[str, Any]]:
     for m in msgs: m["id"] = str(m["_id"])
     return msgs
 
-def verify_user(db, username: str, password: str) -> bool:
-    u = db[COL_USERS].find_one({"username": username})
-    return bool(u and u.get("password_hash") == sha256(password))
-
-def add_user(db, username: str, password: str, role: str = "user") -> Optional[str]:
+# --- UPDATED FUNCTION ---
+def add_user(db, username: str, password: str, email: str, role: str = "user") -> Optional[str]:
+    """ --- UPDATED function to use .hash() --- """
     try:
+        # --- THIS LINE IS THE FIX ---
+        hashed_password = stauth.Hasher().hash(password)
+        # ---------------------------
         db[COL_USERS].insert_one({
             "username": username,
-            "password_hash": sha256(password),
+            "password_hash": hashed_password,
+            "email": email,
             "role": role,
             "created_at": dt.datetime.utcnow().isoformat() + "Z",
         })
         return "ok"
     except Exception as e:
+        if "E11000 duplicate key error" in str(e) and "email" in str(e):
+            return "Email address already exists."
         return str(e)
 
 def delete_user(db, username: str) -> Optional[str]:
     try:
-        # delete user and their data
         convs = list(db[COL_CONV].find({"user": username}, {"_id": 1}))
         conv_ids = [str(c["_id"]) for c in convs]
         if conv_ids:

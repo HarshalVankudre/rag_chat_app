@@ -15,10 +15,9 @@ from rag.ingest import (
     upsert_chunks,
 )
 
-def ingest_panel(db, env_doc: Dict[str, Any]):
-    st.subheader("📥 Upload & Ingest Documents to Pinecone")
+def ingest_panel(db, env_doc: Dict[str, Any], lang: dict):
+    st.subheader(lang["ingest_title"])
 
-    # Always reload latest env from Mongo so we don't use stale settings
     env_now = load_env_doc(db) if db is not None else env_doc
     try:
         settings = AppSettings(
@@ -40,28 +39,28 @@ def ingest_panel(db, env_doc: Dict[str, Any]):
             mongo_db=env_now.get("mongo_db","rag_chat"),
         )
     except ValidationError as e:
-        st.error("Environment not configured. Open Admin → Environment and save your keys.")
+        st.error(lang["ingest_error_env_not_configured"])
         st.exception(e)
         return
 
     with st.form("ingest_form"):
         files = st.file_uploader(
-            "Choose documents",
+            lang["ingest_file_uploader"],
             type=["txt","md","pdf","docx","csv","log"],
             accept_multiple_files=True
         )
         ns_override = st.text_input(
-            "Namespace (leave blank to use default)",
+            lang["ingest_namespace_label"],
             value=env_now.get("pinecone_namespace","")
         )
-        chunk_size = st.number_input("Chunk size", 300, 4000, 1000, 100)
-        chunk_overlap = st.number_input("Chunk overlap", 0, 1000, 200, 50)
+        chunk_size = st.number_input(lang["ingest_chunk_size"], 300, 4000, 1000, 100)
+        chunk_overlap = st.number_input(lang["ingest_chunk_overlap"], 0, 1000, 200, 50)
 
-        submitted = st.form_submit_button("🚀 Embed & Upsert")
+        submitted = st.form_submit_button(lang["ingest_submit_button"])
 
     if submitted:
         if not files:
-            st.warning("Select files first.")
+            st.warning(lang["ingest_warn_no_files"])
         else:
             try:
                 client = get_openai_client(settings.openai_api_key, settings.openai_base_url)
@@ -70,11 +69,11 @@ def ingest_panel(db, env_doc: Dict[str, Any]):
                 progress = st.progress(0)
 
                 for i, f in enumerate(files, start=1):
-                    with st.status(f"Ingesting **{f.name}** …", expanded=True):
+                    with st.status(lang["ingest_status_ingesting"].format(f_name=f.name), expanded=True):
                         try:
                             units = extract_text_units(f)
                             if not units or all(not u[0].strip() for u in units):
-                                st.warning("No text found; skipping.")
+                                st.warning(lang["ingest_status_no_text"])
                             else:
                                 rec = upsert_chunks(
                                     client,
@@ -90,41 +89,46 @@ def ingest_panel(db, env_doc: Dict[str, Any]):
                                 )
                                 db[COL_INGEST].insert_one(rec)
                                 st.success(
-                                    f"Uploaded {rec['vector_count']} chunks to `{rec['namespace']}` "
-                                    f"(doc_id: `{rec['doc_id']}`)"
+                                    lang["ingest_status_success"].format(
+                                        rec_vector_count=rec['vector_count'],
+                                        rec_namespace=rec['namespace'],
+                                        rec_doc_id=rec['doc_id']
+                                    )
                                 )
                         except Exception as exf:
-                            st.error(f"Failed: {exf}")
+                            st.error(f"{lang['ingest_status_failed']}: {exf}")
                     progress.progress(int(100 * i / len(files)))
-                st.success("✅ Done")
+                st.success(lang["ingest_status_done"])
             except Exception as ex:
-                st.error(f"Ingestion failed: {ex}")
+                st.error(f"{lang['ingest_error_failed']}: {ex}")
 
     st.divider()
-    st.markdown("### 📚 Ingested documents")
-    # Simple list + delete controls
+    st.markdown(lang["ingest_docs_header"])
     if db is not None:
         cursor = db[COL_INGEST].find({}).sort("uploaded_at", -1)
         found = False
         for rec in cursor:
             found = True
-            with st.expander(f"📄 {rec.get('filename','(no name)')} • ns={rec.get('namespace')} • vectors={rec.get('vector_count')}"):
+            expander_label = lang["ingest_docs_expander_label"].format(
+                filename=rec.get('filename','(no name)'),
+                namespace=rec.get('namespace'),
+                vector_count=rec.get('vector_count')
+            )
+            with st.expander(expander_label):
                 st.code({"doc_id": rec.get("doc_id"), "namespace": rec.get("namespace"), "vector_count": rec.get("vector_count")})
                 col_a, col_b = st.columns([1, 3])
                 with col_a:
-                    if st.button("🗑️ Delete vectors", key=f"delvec-{rec['_id']}"):
+                    if st.button(lang["ingest_delete_button"], key=f"delvec-{rec['_id']}"):
                         try:
                             index = get_pinecone_index(settings.pinecone_api_key, settings.pinecone_host, settings.pinecone_index_name)
-                            # Delete by stored vector IDs in this manifest entry
                             vec_ids = rec.get("vector_ids") or []
                             index.delete(ids=vec_ids, namespace=rec.get("namespace"))
-                            # Optionally also remove the manifest row:
                             db[COL_INGEST].delete_one({"_id": rec["_id"]})
-                            st.success("Vectors deleted and manifest removed.")
+                            st.success(lang["ingest_delete_success"])
                             st.experimental_rerun() if hasattr(st, "experimental_rerun") else st.rerun()
                         except Exception as exd:
-                            st.error(f"Delete failed: {exd}")
+                            st.error(f"{lang['ingest_delete_failed']}: {exd}")
                 with col_b:
-                    st.caption("Deletes the vectors from Pinecone and removes this manifest entry.")
+                    st.caption(lang["ingest_delete_caption"])
         if not found:
-            st.info("No ingested documents yet. Upload some above.")
+            st.info(lang["ingest_docs_none"])

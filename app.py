@@ -1,14 +1,13 @@
 import streamlit as st
+import streamlit_authenticator as stauth
 
 from config.env import load_env_doc, save_env_doc
-from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, verify_user
-# Import the new functions
+from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, fetch_all_users_for_auth
 from ui.chat import render_chat_ui, process_new_message
 from ui.admin import admin_dashboard
+from config.i18n import get_lang
 
-# --- UPDATED APP TITLE ---
 APP_TITLE = "💬 RükoGPT"
-# -------------------------
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -17,148 +16,168 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+if 'lang_code' not in st.session_state:
+    st.session_state['lang_code'] = 'en'
 
-def setup_screen():
-    """First-run setup to enter Mongo URI/DB. Does NOT prefill or show secrets."""
-    st.title("🛠️ First-run setup: MongoDB")
-    st.write(
-        "Enter your MongoDB connection string and database name. "
-        "Values are stored in Mongo (collection `env`) after a successful connect."
+with st.sidebar:
+    st.selectbox(
+        label="Language / Sprache",
+        options=[('en', '🇬🇧 English'), ('de', '🇩🇪 Deutsch')],
+        format_func=lambda x: x[1],
+        key='lang_select_key',
+        on_change=lambda: st.session_state.update(lang_code=st.session_state.lang_select_key[0])
     )
 
-    uri = st.text_input(
-        "Mongo URI",
-        value="",
-        type="password",
-        placeholder="mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority&appName=chatbot",
-        help="The value is masked and not displayed back. It will be saved to Mongo after connection."
-    )
-    db_name = st.text_input("Mongo DB name", value="rag_chat", placeholder="rag_chat")
+lang = get_lang(st.session_state.get('lang_code', 'en'))
 
+
+def setup_screen(lang: dict):
+    # ... (This function is unchanged)
+    st.title(lang["setup_title"])
+    st.write(lang["setup_descr"])
+    uri = st.text_input(lang["setup_mongo_uri"], value="", type="password",
+                        placeholder=lang["setup_mongo_uri_placeholder"], help=lang["setup_mongo_uri_help"])
+    db_name = st.text_input(lang["setup_mongo_db"], value="rag_chat", placeholder="rag_chat")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("💾 Save & Connect", use_container_width=True):
+        if st.button(lang["setup_button"], use_container_width=True):
             test_uri = uri.strip()
-            if not test_uri:
-                st.error("Please paste a Mongo URI.")
-                return
-
-            # Try connect first (no secrets persisted yet)
+            if not test_uri: st.error(lang["setup_error_no_uri"]); return
             client = get_mongo(test_uri)
-            if client is None:
-                st.error(
-                    "Could not connect to MongoDB.\n\n"
-                    "- Check username/password\n"
-                    "- Ensure Atlas Network Access allows this host (Streamlit Cloud egress IPs)\n"
-                    "- Verify the connection string"
-                )
-                return
-
-            # On success: write to local file (dev) so next boot reuses; also seed DB
+            if client is None: st.error(lang["setup_error_connect_failed"]); return
             save_env_doc({"mongo_uri": test_uri, "mongo_db": db_name.strip() or "rag_chat"}, db=None)
-
             db = client[(db_name.strip() or "rag_chat")]
             try:
                 ensure_indexes(db)
-                seed_admin_if_empty(db)  # seeds admin if empty
-                # Persist full env doc into Mongo so cloud runs pull from DB thereafter
+                # --- UPDATED TO CAPTURE RETURN VALUE ---
+                seed_status = seed_admin_if_empty(db)
+                print(f"--- DEBUG (Setup): Seeding status: {seed_status}")
+                # -------------------------------------
                 save_env_doc({"mongo_uri": test_uri, "mongo_db": db.name}, db=db)
-            except Exception:
+            except Exception as e:
+                print(f"--- DEBUG (Setup): Error during seeding: {e}")
                 pass
-
-            st.success("MongoDB connected. Re-running the app…")
+            st.success(lang["setup_success"]);
             st.rerun()
     with col2:
-        st.caption("Tip: If Streamlit Cloud can't reach Mongo, check Atlas IP allowlist.")
-
-
-def login_screen(db):
-    st.title("🔐 Login")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Sign in"):
-        if db is None:
-            st.error("MongoDB is not configured yet.")
-        else:
-            if verify_user(db, username, password):
-                user_doc = db["users"].find_one({"username": username}) or {}
-                st.session_state["auth_user"] = username
-                st.session_state["is_admin"] = (user_doc.get("role") == "admin")
-                st.rerun()
-            else:
-                st.error("Invalid credentials.")
+        st.caption(lang["setup_caption"])
 
 
 # -------- Bootstrap: read config and try connecting --------
 env_local = load_env_doc(db=None)
 mongo_client = get_mongo(env_local.get("mongo_uri"))
 db = None
+
 if mongo_client is not None:
     db = mongo_client[env_local.get("mongo_db", "rag_chat")]
+
+    # --- ADDED LOGS ---
+    print("\n" + "=" * 50)
+    print(f"--- DEBUG: Connected to MongoDB. Using database: '{db.name}'")
+    # ------------------
+
     try:
         ensure_indexes(db)
-        seed_admin_if_empty(db)
-    except Exception:
+        # --- UPDATED TO CAPTURE AND PRINT RETURN VALUE ---
+        seed_status = seed_admin_if_empty(db)
+        print(f"--- DEBUG: Seeding status: {seed_status}")
+        # -----------------------------------------------
+    except Exception as e:
+        # --- ADDED LOG ---
+        print(f"--- DEBUG: Error during startup indexing/seeding: {e}")
+        # -----------------
         pass
 
 env_doc = load_env_doc(db) if db is not None else env_local
 
-# If still no DB connection, show setup page
 if db is None:
-    setup_screen()
+    setup_screen(lang)
     st.stop()
 
-# -------- Sidebar session controls --------
-with st.sidebar:
-    st.markdown(f"### {APP_TITLE}")
-    if "auth_user" not in st.session_state:
-        st.session_state["auth_user"] = None
-    if "is_admin" not in st.session_state:
-        st.session_state["is_admin"] = False
+# --- Authenticator Setup ---
+credentials = fetch_all_users_for_auth(db)
 
-    if st.session_state["auth_user"]:
+# --- ADDED LOG ---
+print(f"--- DEBUG: Fetched credentials for authenticator: {credentials}")
+print("=" * 50 + "\n")
+# -----------------
+
+default_key = "your_strong_secret_key_here"
+secret_key = env_doc.get("auth_secret_key", default_key)
+expiry_days = int(env_doc.get("auth_cookie_expiry_days", 30))
+
+if secret_key == default_key:
+    st.warning(
+        "Warning: Using default auth_secret_key. Please set a strong secret key in your environment for security.")
+
+authenticator = stauth.Authenticate(
+    credentials,
+    "rag_chat_cookie_v1",
+    secret_key,
+    cookie_expiry_days=expiry_days
+)
+
+# ... (rest of the file is unchanged) ...
+st.session_state["auth_user"] = None
+st.session_state["is_admin"] = False
+
+authenticator.login(fields={
+    'Form name': lang["login_title"],
+    'Username': lang["username"],
+    'Password': lang["password"],
+    'Login': lang["login_button"]
+})
+
+if st.session_state.get("authentication_status"):
+    username = st.session_state["username"]
+    st.session_state["auth_user"] = username
+
+    user_data = credentials.get("usernames", {}).get(username, {})
+    user_role = user_data.get("role", "user")
+    st.session_state["is_admin"] = (user_role == "admin")
+
+    with st.sidebar:
+        st.markdown(f"### {APP_TITLE}")
+        admin_label = f"({lang['sidebar_admin']})" if st.session_state.get('is_admin') else ''
         st.success(
-            f"Signed in as **{st.session_state['auth_user']}** "
-            f"{'(admin)' if st.session_state.get('is_admin') else ''}"
+            f"{lang['sidebar_signed_in_as']} **{username}** {admin_label}"
         )
-        if st.button("Log out"):
-            for k in ["auth_user", "is_admin", "current_conv_id"]:
-                st.session_state.pop(k, None)
-            st.rerun()
+        authenticator.logout(lang["sidebar_logout"], "sidebar")
 
-# -------- Main routing --------
-if not st.session_state["auth_user"]:
-    login_screen(db)
-else:
-    # State for chat
+        if st.session_state.get("is_admin"):
+            st.radio(
+                "Admin Navigation",
+                [lang["sidebar_nav_chat"], lang["sidebar_nav_admin"]],
+                key="admin_view",
+                label_visibility="collapsed",
+                index=0
+            )
+            st.divider()
+
     current_conv_id = None
-    username = st.session_state["auth_user"]
+    prompt = None
 
     if st.session_state.get("is_admin"):
-        tab_chat, tab_admin = st.tabs(["💬 Chat", "🛡️ Admin"])
-        with tab_chat:
-            # Render chat messages and sidebar
-            current_conv_id = render_chat_ui(db, username)
-        with tab_admin:
-            admin_dashboard(db, env_doc)
+        admin_view_selection = st.session_state.get("admin_view", lang["sidebar_nav_chat"])
+        if admin_view_selection == lang["sidebar_nav_chat"]:
+            current_conv_id = render_chat_ui(db, username, lang, render_main_chat=True, render_conv_sidebar=True)
+            prompt = st.chat_input(lang.get("chat_input_placeholder", "Ask about your documents or anything..."))
+        elif admin_view_selection == lang["sidebar_nav_admin"]:
+            current_conv_id = render_chat_ui(db, username, lang, render_main_chat=False, render_conv_sidebar=False)
+            admin_dashboard(db, env_doc, lang)
     else:
-        # Render chat messages and sidebar
-        current_conv_id = render_chat_ui(db, username)
-
-    # --- Place st.chat_input at the top level ---
-    prompt = st.chat_input("Ask about your documents or anything...")
+        current_conv_id = render_chat_ui(db, username, lang, render_main_chat=True, render_conv_sidebar=True)
+        prompt = st.chat_input(lang.get("chat_input_placeholder", "Ask about your documents or anything..."))
 
     if prompt:
         if current_conv_id:
-            # We can process the message regardless of the tab,
-            # as long as a conversation is selected.
-            process_new_message(db, env_doc, username, current_conv_id, prompt)
-
-            # Rerun only if we are in the admin tab view to refresh the chat
-            # This is a small hack to make sure the tab content updates
-            if st.session_state.get("is_admin"):
-                st.rerun()
+            process_new_message(db, env_doc, username, current_conv_id, prompt, lang)
+            st.rerun()
         else:
-            # This case might happen if no chat is created yet, etc.
-            st.error("No active conversation selected.")
+            st.error(lang["chat_no_conv_selected"])
+
+elif st.session_state["authentication_status"] is False:
+    st.error(lang["login_error_incorrect"])
+
+elif st.session_state["authentication_status"] is None:
+    st.info(lang["login_prompt"])
