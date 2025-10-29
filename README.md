@@ -32,8 +32,10 @@ An intelligent, document-aware chatbot built with <b>Streamlit</b>, powered by <
 
 - **📄 Document Ingestion**
   - Upload and embed `.pdf`, `.docx`, `.txt`, `.md`, `.csv`, `.log` files.
-  - Documents are chunked, embedded (OpenAI), and stored in Pinecone.
+  - Documents are parsed with [Docling](https://github.com/IBM/docling) for high-fidelity text extraction, then chunked, embedded (OpenAI), and stored in Pinecone.
   - Handles German umlauts gracefully (`ä→ae`, `ö→oe`, `ü→ue`, etc.).
+- **🔍 Multi-index Retrieval**
+  - Configure multiple Pinecone indexes and the chatbot will merge results across all of them for each answer.
 
 - **⚙️ Dynamic Configuration**
   - Environment setup directly from the Streamlit UI.
@@ -75,6 +77,7 @@ Log in as **admin** → open **Admin → Environment** to configure:
 | **OpenAI API Key** | For embeddings & chat completions |
 | **Pinecone API Key** | Pinecone project key |
 | **Pinecone Host** | Example: `your-index.svc.region.pinecone.io` |
+| **Pinecone Retrieval Indexes** | Optional newline/comma separated list of index names queried during chat |
 | **Mongo URI** | Example: `mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority` |
 | **Mongo DB Name** | Default: `rag_chat` |
 
@@ -98,6 +101,7 @@ Log in as **admin** → open **Admin → Environment** to configure:
 1. Go to **Admin → Ingest**
 2. Upload one or more supported documents.
 3. Each file is:
+   - Parsed by Docling for consistent text extraction.
    - Split into text chunks.
    - Embedded with OpenAI.
    - Stored in Pinecone along with metadata.
@@ -139,6 +143,7 @@ rag_chat_app/
 | **LLM & Embeddings** | [OpenAI API](https://platform.openai.com/) |
 | **Vector DB** | [Pinecone](https://www.pinecone.io/) |
 | **Database** | [MongoDB Atlas](https://www.mongodb.com/atlas) |
+| **Document parsing** | [Docling](https://github.com/IBM/docling) |
 | **Validation** | [Pydantic v2](https://docs.pydantic.dev/) |
 | **Language** | Python 3.10+ |
 

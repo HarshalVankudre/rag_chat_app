@@ -1,2 +1,1 @@
-# This file makes 'utils' a Python package.
-
+"""Utility helpers for the RAG chat application."""
