@@ -1,8 +1,16 @@
-# config/env.py
+"""Environment persistence and override helpers."""
+
+from __future__ import annotations
+
 import json
 import logging
 import os
-from typing import Any, Dict
+from collections.abc import Mapping, MutableMapping
+from pathlib import Path
+from typing import Any
+
+from pymongo.database import Database
+from pymongo.errors import PyMongoError
 
 from models.settings import default_env
 
@@ -12,9 +20,10 @@ logger = logging.getLogger(__name__)
 
 # We DO NOT use streamlit.secrets here.
 # Precedence (lowest -> highest):
-#   default_env()  <  env_settings.json (local dev)  <  Mongo 'env' doc  <  OS env vars (optional override)
+#   default_env()  <  env_settings.json (local dev)
+#   < Mongo 'env' doc  <  OS env vars (optional override)
 
-_ENV_MAP = {
+_ENV_MAP: Mapping[str, str] = {
     "openai_api_key": "OPENAI_API_KEY",
     "openai_base_url": "OPENAI_BASE_URL",
     "pinecone_api_key": "PINECONE_API_KEY",
@@ -26,35 +35,42 @@ _ENV_MAP = {
 }
 
 
-def _overrides_from_os_env() -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _overrides_from_os_env() -> dict[str, Any]:
+    """Collect non-empty overrides supplied via environment variables."""
+    out: dict[str, Any] = {}
     for key, env_key in _ENV_MAP.items():
-        v = os.getenv(env_key)
-        if v is not None and str(v).strip():
-            out[key] = str(v).strip()
+        value = os.getenv(env_key)
+        if value is not None and str(value).strip():
+            out[key] = str(value).strip()
     return out
 
 
-def load_env_doc(db=None) -> Dict[str, Any]:
-    base = default_env()
+def _resolve_env_file() -> Path:
+    """Return the configured environment file path as a :class:`Path`."""
+    return Path(ENV_FILE)
+
+
+def load_env_doc(db: Database | None = None) -> dict[str, Any]:
+    """Return the merged environment document from defaults and overrides."""
+    base: dict[str, Any] = default_env()
 
     # Local JSON (dev convenience)
-    file_doc: Dict[str, Any] = {}
-    if os.path.exists(ENV_FILE):
+    file_doc: dict[str, Any] = {}
+    env_file = _resolve_env_file()
+    if env_file.exists():
         try:
-            with open(ENV_FILE, encoding="utf-8") as f:
-                file_doc = json.load(f) or {}
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning(f"Could not load local env_settings.json: {e}")
+            file_doc = json.loads(env_file.read_text(encoding="utf-8")) or {}
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not load local env_settings.json", exc_info=exc)
             file_doc = {}
 
     # Mongo (authoritative store for cloud/production)
-    mongo_doc: Dict[str, Any] = {}
+    mongo_doc: dict[str, Any] = {}
     if db is not None:
         try:
             mongo_doc = db["env"].find_one({"_id": "global"}) or {}
-        except Exception as e:
-            logger.error(f"Could not fetch env doc from MongoDB: {e}")
+        except PyMongoError as exc:
+            logger.exception("Could not fetch env doc from MongoDB", exc_info=exc)
             mongo_doc = {}
 
     # Optional OS overrides (Docker, CI, etc.)
@@ -64,22 +80,23 @@ def load_env_doc(db=None) -> Dict[str, Any]:
     return {**base, **file_doc, **mongo_doc, **top}
 
 
-def save_env_doc(env_doc: Dict[str, Any], db=None) -> None:
-    """Save config to Mongo if available; otherwise to local JSON (dev only)."""
-    payload = {**default_env(), **(env_doc or {})}
+def save_env_doc(env_doc: Mapping[str, Any], db: Database | None = None) -> None:
+    """Persist environment overrides to MongoDB or the local JSON file."""
+    payload: MutableMapping[str, Any] = {**default_env(), **(env_doc or {})}
     if db is not None:
         try:
             payload["_id"] = "global"
             db["env"].find_one_and_replace({"_id": "global"}, payload, upsert=True)
             logger.info("Saved environment settings to MongoDB.")
-        except Exception as e:
-            logger.exception(f"Failed to save env doc to MongoDB: {e}")
+        except PyMongoError as exc:
+            logger.exception("Failed to save env doc to MongoDB", exc_info=exc)
         return
+
     # Local file (dev)
+    env_file = _resolve_env_file()
     try:
-        with open(ENV_FILE, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
+        env_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         logger.info("Saved environment settings to local env_settings.json.")
-    except OSError as e:
-        logger.warning(f"Failed to save env doc to local JSON: {e}")
+    except OSError as exc:
+        logger.warning("Failed to save env doc to local JSON", exc_info=exc)
 

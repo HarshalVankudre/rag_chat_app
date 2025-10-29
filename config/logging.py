@@ -1,9 +1,11 @@
+"""Logging configuration helpers."""
+
 import logging
 import sys
 
 
-def setup_logging():
-    """Configures the root logger for the application.
+def setup_logging() -> None:
+    """Configure the root logger for the application.
 
     This should be called once at the very beginning of the app startup.
     It sets the logging level to INFO and defines a clear log format.
