@@ -238,8 +238,8 @@ def process_new_message(
     env_doc = load_env_doc(db) if db is not None else env_doc
     try:
         settings = AppSettings.from_env(env_doc)
-    except ValidationError as exc:
-        logger.exception("Environment settings are invalid")
+    except ValidationError as e:
+        logger.exception(f"Environment settings are invalid: {e}")
         st.error(lang["chat_error_env_not_configured"])
         st.exception(exc)
         return None

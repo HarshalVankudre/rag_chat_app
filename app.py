@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 def configure_page() -> None:
     """Configure the Streamlit page before rendering any UI."""
+
     st.set_page_config(
         page_title=APP_TITLE,
         page_icon="💬",
@@ -40,6 +41,7 @@ def configure_page() -> None:
 
 def initialize_language() -> dict[str, Any]:
     """Persist and resolve the active UI language."""
+
     if "lang_code" not in st.session_state:
         st.session_state["lang_code"] = "en"
 
@@ -59,6 +61,7 @@ def initialize_language() -> dict[str, Any]:
 
 def setup_screen(lang_dict: dict[str, Any]) -> None:
     """First-run setup to enter Mongo URI/DB."""
+
     st.title(lang_dict["setup_title"])
     st.write(lang_dict["setup_descr"])
 
@@ -113,6 +116,7 @@ def setup_screen(lang_dict: dict[str, Any]) -> None:
 @st.cache_resource(ttl=600)
 def get_auth_credentials(_db: Database) -> dict[str, Any]:
     """Wrap the fetch call in Streamlit's cache."""
+
     logger.info(
         "Refreshing authentication credentials cache for database '%s'.",
         _db.name,
@@ -124,12 +128,14 @@ def get_auth_credentials(_db: Database) -> dict[str, Any]:
 
 def _resolve_user_role(db: Database, username: str) -> str:
     """Lookup the latest role for a user."""
+
     user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
     return user_doc_live.get("role", "user")
 
 
 def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any]) -> None:
     """Render the authenticated portion of the UI."""
+
     db = context.db
     if db is None:
         setup_screen(lang)
@@ -234,6 +240,7 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
 
 def main() -> None:
     """Entry point used by Streamlit to render the application."""
+
     setup_logging()
     configure_page()
     lang = initialize_language()
