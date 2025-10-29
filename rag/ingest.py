@@ -1,30 +1,55 @@
-import datetime as dt
+"""Document ingestion and vectorisation helpers."""
+
+from __future__ import annotations
+
 import io
 import logging
-import os
 import uuid
-from typing import Dict, List, Optional, Tuple
+from collections.abc import Iterable
+from datetime import datetime as dt
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 try:
     from pypdf import PdfReader
-except ImportError:
+    from pypdf.errors import PdfReadError
+except ImportError:  # pragma: no cover - optional dependency
     PdfReader = None
+    PdfReadError = RuntimeError
 try:
     import docx
 except ImportError:
     docx = None
+
+from openai import OpenAI
+from pinecone import Index
 
 from utils.chunk import chunk_text
 from utils.ids import pinecone_safe_slug, sanitize_namespace
 
 from .pinecone_utils import embed_texts
 
+PYPDF_MISSING_MSG = "pypdf is not installed"
+DOCX_MISSING_MSG = "python-docx is not installed"
+
+
+@runtime_checkable
+class Uploadable(Protocol):
+    """Minimal protocol for uploaded files handled by Streamlit."""
+
+    name: str
+
+    def read(self) -> bytes:
+        """Return the raw file contents."""
+
+
 logger = logging.getLogger(__name__)
 
 
-def extract_text_units(uploaded_file) -> List[Tuple[str, str]]:
+def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
+    """Extract text units from an uploaded file for downstream chunking."""
     name = uploaded_file.name
-    suffix = os.path.splitext(name)[1].lower()
+    suffix = Path(name).suffix.lower()
     if suffix in [".txt", ".md", ".csv", ".log"]:
         raw = uploaded_file.read()
         try:
@@ -34,15 +59,18 @@ def extract_text_units(uploaded_file) -> List[Tuple[str, str]]:
         return [(text, f"{name}")]
     if suffix == ".pdf":
         if PdfReader is None:
-            raise RuntimeError("pypdf is not installed.")
+            raise RuntimeError(PYPDF_MISSING_MSG)
         reader = PdfReader(io.BytesIO(uploaded_file.read()))
         units = []
         for i, page in enumerate(reader.pages):
             try:
                 page_text = page.extract_text() or ""
-            except Exception as e:
+            except PdfReadError as exc:
                 logger.warning(
-                    f"Failed to extract text from PDF page {i+1} of {name}: {e}"
+                    "Failed to extract text from PDF page %s of %s",
+                    i + 1,
+                    name,
+                    exc_info=exc,
                 )
                 page_text = ""
             if page_text.strip():
@@ -50,7 +78,7 @@ def extract_text_units(uploaded_file) -> List[Tuple[str, str]]:
         return units or [("", f"{name}")]
     if suffix == ".docx":
         if docx is None:
-            raise RuntimeError("python-docx is not installed.")
+            raise RuntimeError(DOCX_MISSING_MSG)
         document = docx.Document(io.BytesIO(uploaded_file.read()))
         paras = [p.text for p in document.paragraphs if p.text and p.text.strip()]
         text = "\n".join(paras)
@@ -64,22 +92,30 @@ def extract_text_units(uploaded_file) -> List[Tuple[str, str]]:
     return [(text, f"{name}")]
 
 
-def build_context(matches, text_key: str, source_key: str, max_chars: int):
-    contexts, total, sources = [], 0, []
-    for m in matches or []:
-        md = m.get("metadata") or {}
-        chunk = str(md.get(text_key, ""))
+def build_context(
+    matches: Iterable[dict[str, Any]] | None,
+    text_key: str,
+    source_key: str,
+    max_chars: int,
+) -> dict[str, Any]:
+    """Build a context blob from retrieved vector matches."""
+    contexts: list[str] = []
+    sources: list[dict[str, Any]] = []
+    total = 0
+    for match in matches or []:
+        metadata = match.get("metadata") or {}
+        chunk = str(metadata.get(text_key, ""))
         if not chunk:
             continue
         if total + len(chunk) > max_chars:
             break
         total += len(chunk)
         contexts.append(chunk)
-        src = md.get(source_key)
+        src = metadata.get(source_key)
         sources.append(
             {
-                "id": m.get("id"),
-                "score": m.get("score"),
+                "id": match.get("id"),
+                "score": match.get("score"),
                 "source": str(src) if src else None,
             }
         )
@@ -87,30 +123,33 @@ def build_context(matches, text_key: str, source_key: str, max_chars: int):
 
 
 def upsert_chunks(
-    client,
-    index,
+    client: OpenAI,
+    index: Index,
     *,
     embedding_model: str,
     filename: str,
-    text_units: List[Tuple[str, str]],
-    namespace: Optional[str],
+    text_units: list[tuple[str, str]],
+    namespace: str | None,
     chunk_size: int,
     chunk_overlap: int,
     md_text_key: str,
     md_source_key: str,
-) -> Dict:
-    now = dt.datetime.utcnow().isoformat() + "Z"
+) -> dict[str, Any]:
+    """Chunk, embed, and upsert document text into Pinecone."""
+    now = dt.utcnow().isoformat() + "Z"
     doc_id = f"{pinecone_safe_slug(filename)}-{uuid.uuid4().hex[:8]}"
-    all_chunks, all_sources, vec_ids = [], [], []
+    all_chunks: list[str] = []
+    all_sources: list[str] = []
+    vec_ids: list[str] = []
     for unit_text, unit_src in text_units:
-        for ch in chunk_text(
+        for chunk in chunk_text(
             unit_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap
         ):
-            all_chunks.append(ch)
+            all_chunks.append(chunk)
             all_sources.append(unit_src)
-    embeddings = []
+    embeddings: list[list[float]] = []
     if not all_chunks:
-        logger.warning(f"No text chunks found for {filename}, skipping upsert.")
+        logger.warning("No text chunks found for %s, skipping upsert.", filename)
         return {
             "doc_id": doc_id,
             "filename": filename,
@@ -125,30 +164,33 @@ def upsert_chunks(
         vecs = embed_texts(client, sub, embedding_model)
         embeddings.extend(vecs)
 
-    def json_safe(meta: dict) -> dict:
-        out = {}
-        for k, v in meta.items():
-            if isinstance(v, (str, int, float, bool)) or v is None:
-                out[k] = v
+    def json_safe(meta: dict[str, Any]) -> dict[str, Any]:
+        """Coerce metadata to JSON-friendly primitives."""
+        out: dict[str, Any] = {}
+        for key, value in meta.items():
+            if isinstance(value, (str | int | float | bool)) or value is None:
+                out[key] = value
             else:
-                out[k] = str(v)
+                out[key] = str(value)
         return out
 
-    vectors = []
+    vectors: list[dict[str, Any]] = []
     ns = sanitize_namespace(namespace or "__default__")
-    for idx, (emb, src, ch_text) in enumerate(zip(embeddings, all_sources, all_chunks)):
+    for idx, (embedding, source, chunk_text_value) in enumerate(
+        zip(embeddings, all_sources, all_chunks, strict=False)
+    ):
         vid = f"{doc_id}::chunk-{idx:04d}"
         meta = json_safe(
             {
-                md_text_key: ch_text,
-                md_source_key: src,
+                md_text_key: chunk_text_value,
+                md_source_key: source,
                 "doc_id": doc_id,
                 "filename": filename,
                 "uploaded_at": now,
                 "chunk_index": idx,
             }
         )
-        vectors.append({"id": vid, "values": [float(x) for x in emb], "metadata": meta})
+        vectors.append({"id": vid, "values": [float(x) for x in embedding], "metadata": meta})
         vec_ids.append(vid)
     for i in range(0, len(vectors), 1000):
         index.upsert(vectors=vectors[i : i + 1000], namespace=ns)

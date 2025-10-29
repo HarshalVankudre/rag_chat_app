@@ -1,4 +1,4 @@
-# config/i18n.py
+"""Static translations used throughout the Streamlit UI."""
 
 # --- English Strings ---
 en_strings = {
@@ -262,7 +262,8 @@ de_strings = {
 
 
 def get_lang(lang_code: str) -> dict:
-    """Returns the dictionary of strings for the given language code.
+    """Return strings for the given language code.
+
     Defaults to English.
     """
     if lang_code == "de":

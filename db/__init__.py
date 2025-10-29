@@ -1,2 +1,1 @@
-# This file makes 'db' a Python package.
-
+"""Database access helpers for the RAG chat application."""

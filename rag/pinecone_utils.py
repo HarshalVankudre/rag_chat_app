@@ -1,31 +1,43 @@
-from typing import Dict, Iterable, List, Optional
+"""Thin wrappers around OpenAI and Pinecone clients."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from typing import Any
 
 from openai import OpenAI
-from pinecone import Pinecone
+from pinecone import Index, Pinecone
 
 
-def get_openai_client(api_key: str, base_url: Optional[str] = None) -> OpenAI:
-    kwargs = {"api_key": api_key}
+def get_openai_client(api_key: str, base_url: str | None = None) -> OpenAI:
+    """Return an OpenAI client configured with the provided credentials."""
+    kwargs: dict[str, Any] = {"api_key": api_key}
     if base_url:
         kwargs["base_url"] = base_url.strip()
     return OpenAI(**kwargs)
 
 
-def get_pinecone_index(api_key: str, host: Optional[str], index_name: Optional[str]):
+def get_pinecone_index(api_key: str, host: str | None, index_name: str | None) -> Index:
+    """Return a Pinecone index using either the HTTP host or the index name."""
     pc = Pinecone(api_key=api_key)
     if host and host.strip():
         return pc.Index(host=host.strip())
     if index_name and index_name.strip():
         return pc.Index(index_name.strip())
-    raise ValueError("Provide Pinecone index host or index name.")
+    msg = "Provide Pinecone index host or index name."
+    raise ValueError(msg)
 
 
-def embed_texts(client: OpenAI, texts: List[str], model: str) -> List[List[float]]:
+def embed_texts(client: OpenAI, texts: list[str], model: str) -> list[list[float]]:
+    """Generate embeddings for ``texts`` using the supplied model."""
     resp = client.embeddings.create(model=model, input=texts)
-    return [list(map(float, d.embedding)) for d in resp.data]
+    return [list(map(float, data.embedding)) for data in resp.data]
 
 
-def retrieve_chunks(index, query_vec: List[float], top_k: int, namespace: Optional[str]) -> Dict:
+def retrieve_chunks(
+    index: Index, query_vec: list[float], top_k: int, namespace: str | None
+) -> dict[str, Any]:
+    """Query Pinecone for the closest ``top_k`` vectors."""
     return index.query(
         vector=[float(x) for x in query_vec],
         top_k=int(top_k),
@@ -36,10 +48,14 @@ def retrieve_chunks(index, query_vec: List[float], top_k: int, namespace: Option
 
 
 def stream_chat_completion(
-    client: OpenAI, model: str, messages: List[Dict], temperature: float,
-) -> Iterable[str]:
+    client: OpenAI, model: str, messages: list[dict[str, Any]], temperature: float
+) -> Iterator[str]:
+    """Yield chunks from a streaming chat completion response."""
     stream = client.chat.completions.create(
-        model=model, messages=messages, temperature=temperature, stream=True,
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        stream=True,
     )
     for event in stream:
         delta = event.choices[0].delta.content or ""
