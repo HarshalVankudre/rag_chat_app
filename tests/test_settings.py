@@ -11,7 +11,7 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from models.settings import AppSettings, default_env  # noqa: E402
+from models.settings import AppSettings, default_env
 
 
 def _minimal_env() -> dict[str, str]:
@@ -26,7 +26,6 @@ def _minimal_env() -> dict[str, str]:
 
 
 def test_app_settings_from_env_normalises_strings() -> None:
-    """Ensure whitespace-only values are stripped when constructing settings."""
     env = _minimal_env()
     env.update(
         {
@@ -50,7 +49,6 @@ def test_app_settings_from_env_normalises_strings() -> None:
 
 
 def test_app_settings_requires_api_keys() -> None:
-    """Verify that required API keys cannot be blank."""
     env = default_env()
 
     with pytest.raises(ValueError):
