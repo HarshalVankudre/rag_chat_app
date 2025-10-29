@@ -14,7 +14,7 @@ from db.mongo import (
     list_conversations,
     rename_conversation,
 )
-from models.settings import DEFAULT_CHAT_SYSTEM_PROMPT, AppSettings
+from models.settings import AppSettings
 from rag.ingest import build_context
 from rag.pinecone_utils import (
     embed_texts,
@@ -236,28 +236,7 @@ def process_new_message(
 
     env_doc = load_env_doc(db) if db is not None else env_doc
     try:
-        settings = AppSettings(
-            openai_api_key=env_doc.get("openai_api_key", ""),
-            openai_base_url=(env_doc.get("openai_base_url") or None),
-            openai_model=env_doc.get("openai_model", "gpt-4o-mini"),
-            embedding_model=env_doc.get("embedding_model", "text-embedding-3-small"),
-            pinecone_api_key=env_doc.get("pinecone_api_key", ""),
-            pinecone_index_name=(env_doc.get("pinecone_index_name") or None),
-            pinecone_host=(env_doc.get("pinecone_host") or None),
-            pinecone_namespace=(env_doc.get("pinecone_namespace") or None),
-            top_k=int(env_doc.get("top_k", 5)),
-            temperature=float(env_doc.get("temperature", 0.2)),
-            max_context_chars=int(env_doc.get("max_context_chars", 8000)),
-            metadata_text_key=env_doc.get("metadata_text_key", "text"),
-            metadata_source_key=env_doc.get("metadata_source_key", "source"),
-            system_prompt=env_doc.get("system_prompt", DEFAULT_CHAT_SYSTEM_PROMPT),
-            mongo_uri=env_doc.get("mongo_uri"),
-            mongo_db=env_doc.get("mongo_db", "rag_chat"),
-            allow_general_answers=env_doc.get("allow_general_answers", True),
-            rag_min_context_chars=int(env_doc.get("rag_min_context_chars", 600)),
-            rag_min_matches=int(env_doc.get("rag_min_matches", 1)),
-            rag_min_score=float(env_doc.get("rag_min_score", 0.0)),
-        )
+        settings = AppSettings.from_env(env_doc)
     except ValidationError as e:
         logger.exception(f"Environment settings are invalid: {e}")
         st.error(lang["chat_error_env_not_configured"])
