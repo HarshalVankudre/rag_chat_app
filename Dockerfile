@@ -1,21 +1,41 @@
-# Use a slim Python 3.10 base image, as recommended in your README
-FROM python:3.10-slim
+# ---- STAGE 1: The Builder ----
+# Use a full Python image to build our environment
+FROM python:3.10-slim as builder
 
-# Set the working directory inside the container
+# Set working directory
 WORKDIR /app
 
-# Copy the requirements file first to leverage Docker layer caching
-COPY requirements.txt .
+# Install poetry
+RUN pip install poetry
 
-# Install the Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy only the files needed to install dependencies
+# This leverages Docker's cache.
+COPY pyproject.toml poetry.lock ./
 
-# Copy the rest of your application code into the container
+# Install dependencies
+# --no-dev: Skips dev dependencies (like pytest, ruff)
+# --no-root: Skips installing the project itself (it's an app, not a library)
+RUN poetry install --no-dev --no-root
+
+# ---- STAGE 2: The Final Image ----
+# Use a slim image for the final, lightweight container
+FROM python:3.10-slim
+
+# Set working directory
+WORKDIR /app
+
+# Copy the virtual environment from the builder stage
+# This is the key to a clean, isolated environment
+COPY --from=builder /app/.venv /app/.venv
+
+# Set the PATH to use the venv's binaries
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Copy the rest of your application code
 COPY . .
 
 # Streamlit runs on port 8501 by default
 EXPOSE 8501
 
 # The command to run your app
-# We use --server.address=0.0.0.0 to make it accessible outside the container
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
