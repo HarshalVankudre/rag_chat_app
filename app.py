@@ -2,10 +2,12 @@ import streamlit as st
 import streamlit_authenticator as stauth
 
 from config.env import load_env_doc, save_env_doc
-from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, fetch_all_users_for_auth
+# --- UPDATED IMPORTS ---
+from db.mongo import get_mongo, ensure_indexes, seed_admin_if_empty, fetch_all_users_for_auth, COL_USERS # <-- ADDED COL_USERS
 from ui.chat import render_chat_ui, process_new_message
 from ui.admin import admin_dashboard
 from config.i18n import get_lang
+# -----------------------
 
 APP_TITLE = "💬 RükoGPT"
 
@@ -32,36 +34,53 @@ lang = get_lang(st.session_state.get('lang_code', 'en'))
 
 
 def setup_screen(lang: dict):
-    # ... (This function is unchanged)
+    """First-run setup to enter Mongo URI/DB."""
     st.title(lang["setup_title"])
     st.write(lang["setup_descr"])
-    uri = st.text_input(lang["setup_mongo_uri"], value="", type="password",
-                        placeholder=lang["setup_mongo_uri_placeholder"], help=lang["setup_mongo_uri_help"])
+
+    uri = st.text_input(
+        lang["setup_mongo_uri"],
+        value="",
+        type="password",
+        placeholder=lang["setup_mongo_uri_placeholder"],
+        help=lang["setup_mongo_uri_help"]
+    )
     db_name = st.text_input(lang["setup_mongo_db"], value="rag_chat", placeholder="rag_chat")
+
     col1, col2 = st.columns(2)
     with col1:
         if st.button(lang["setup_button"], use_container_width=True):
             test_uri = uri.strip()
-            if not test_uri: st.error(lang["setup_error_no_uri"]); return
+            if not test_uri:
+                st.error(lang["setup_error_no_uri"])
+                return
+
             client = get_mongo(test_uri)
-            if client is None: st.error(lang["setup_error_connect_failed"]); return
+            if client is None:
+                st.error(lang["setup_error_connect_failed"])
+                return
+
             save_env_doc({"mongo_uri": test_uri, "mongo_db": db_name.strip() or "rag_chat"}, db=None)
             db = client[(db_name.strip() or "rag_chat")]
             try:
                 ensure_indexes(db)
-                # --- UPDATED TO CAPTURE RETURN VALUE ---
                 seed_status = seed_admin_if_empty(db)
                 print(f"--- DEBUG (Setup): Seeding status: {seed_status}")
-                # -------------------------------------
                 save_env_doc({"mongo_uri": test_uri, "mongo_db": db.name}, db=db)
             except Exception as e:
                 print(f"--- DEBUG (Setup): Error during seeding: {e}")
                 pass
-            st.success(lang["setup_success"]);
+
+            st.success(lang["setup_success"])
             st.rerun()
     with col2:
         st.caption(lang["setup_caption"])
 
+@st.cache_resource(ttl=600)
+def get_auth_credentials(_db):
+    """Wraps the fetch call in Streamlit's cache."""
+    print("--- DEBUG: Re-fetching auth credentials from database ---")
+    return fetch_all_users_for_auth(_db)
 
 # -------- Bootstrap: read config and try connecting --------
 env_local = load_env_doc(db=None)
@@ -71,21 +90,15 @@ db = None
 if mongo_client is not None:
     db = mongo_client[env_local.get("mongo_db", "rag_chat")]
 
-    # --- ADDED LOGS ---
-    print("\n" + "=" * 50)
+    print("\n" + "="*50)
     print(f"--- DEBUG: Connected to MongoDB. Using database: '{db.name}'")
-    # ------------------
 
     try:
         ensure_indexes(db)
-        # --- UPDATED TO CAPTURE AND PRINT RETURN VALUE ---
         seed_status = seed_admin_if_empty(db)
         print(f"--- DEBUG: Seeding status: {seed_status}")
-        # -----------------------------------------------
     except Exception as e:
-        # --- ADDED LOG ---
         print(f"--- DEBUG: Error during startup indexing/seeding: {e}")
-        # -----------------
         pass
 
 env_doc = load_env_doc(db) if db is not None else env_local
@@ -95,20 +108,17 @@ if db is None:
     st.stop()
 
 # --- Authenticator Setup ---
-credentials = fetch_all_users_for_auth(db)
+credentials = get_auth_credentials(db)
 
-# --- ADDED LOG ---
-print(f"--- DEBUG: Fetched credentials for authenticator: {credentials}")
-print("=" * 50 + "\n")
-# -----------------
+print(f"--- DEBUG: Using auth credentials (from cache or new fetch): {credentials}")
+print("="*50 + "\n")
 
 default_key = "your_strong_secret_key_here"
 secret_key = env_doc.get("auth_secret_key", default_key)
 expiry_days = int(env_doc.get("auth_cookie_expiry_days", 30))
 
 if secret_key == default_key:
-    st.warning(
-        "Warning: Using default auth_secret_key. Please set a strong secret key in your environment for security.")
+    st.warning("Warning: Using default auth_secret_key. Please set a strong secret key in your environment for security.")
 
 authenticator = stauth.Authenticate(
     credentials,
@@ -117,7 +127,6 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=expiry_days
 )
 
-# ... (rest of the file is unchanged) ...
 st.session_state["auth_user"] = None
 st.session_state["is_admin"] = False
 
@@ -132,8 +141,11 @@ if st.session_state.get("authentication_status"):
     username = st.session_state["username"]
     st.session_state["auth_user"] = username
 
-    user_data = credentials.get("usernames", {}).get(username, {})
-    user_role = user_data.get("role", "user")
+    # Re-fetch live user data to ensure role is up-to-date
+    # Uses the imported COL_USERS constant
+    user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
+    user_role = user_doc_live.get("role", "user")
+
     st.session_state["is_admin"] = (user_role == "admin")
 
     with st.sidebar:
