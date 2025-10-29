@@ -1,10 +1,11 @@
-from typing import List
+"""Utility helpers for splitting text into overlapping chunks."""
 
 
-def chunk_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1000, chunk_overlap: int = 200) -> list[str]:
+    """Return overlapping segments of ``text`` respecting the configured size."""
     if chunk_size <= 0:
         return [text]
-    chunks = []
+    chunks: list[str] = []
     start = 0
     while start < len(text):
         end = start + chunk_size

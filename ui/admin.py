@@ -1,8 +1,12 @@
+"""Streamlit admin dashboard views."""
+
 import logging
-from typing import Any, Dict
+from collections.abc import Mapping
+from typing import Any
 
 import streamlit as st
 from pydantic import ValidationError
+from pymongo.database import Database
 
 from config.env import save_env_doc
 from db.mongo import add_user, delete_user
@@ -14,7 +18,8 @@ from .ingest import ingest_panel
 logger = logging.getLogger(__name__)
 
 
-def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
+def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, str]) -> None:
+    """Render the admin dashboard with environment, user, and ingest tools."""
     st.header(lang["admin_dashboard_title"])
 
     # --- Sidebar navigation for admin sections ---
@@ -169,9 +174,12 @@ def admin_dashboard(db, env_doc: Dict[str, Any], lang: dict):
                 stats = idx.describe_index_stats()
                 st.success(lang["admin_env_test_success"])
                 st.json(stats)
-            except (ValidationError, Exception) as ex:
-                logger.exception(f"Connection test failed: {ex}")
-                st.error(f"{lang['admin_env_test_failed']}: {ex}")
+            except ValidationError as exc:
+                logger.exception("Invalid configuration for connection test")
+                st.error(f"{lang['admin_env_test_failed']}: {exc}")
+            except Exception as exc:  # pragma: no cover - runtime safeguard
+                logger.exception("Connection test failed")
+                st.error(f"{lang['admin_env_test_failed']}: {exc}")
 
     elif admin_sub_view == lang["admin_users"]:
         # ... (rest of the file is unchanged) ...
