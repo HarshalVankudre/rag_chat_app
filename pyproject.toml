@@ -18,7 +18,7 @@ dnspython = ">=2.6.1"
 streamlit-authenticator = ">=0.3.0"
 bcrypt = ">=4.0.0"
 # Switched from pinecone-client to pinecone
-pinecone = "^5.0.0"
+pinecone = "^7.3.0"
 # Added windows-specific dependency for pinecone
 
 [tool.poetry.group.dev.dependencies]
