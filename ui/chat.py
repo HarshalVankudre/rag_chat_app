@@ -56,7 +56,8 @@ def find_last_user_question(history_docs: Iterable[dict[str, Any]]) -> str | Non
 @st.cache_data(ttl=10, show_spinner=False)
 def _cached_list_conversations(_db_name: str, username: str, _cache_version: int) -> list[dict[str, Any]]:
     """Cached wrapper for list_conversations."""
-    from db.mongo import get_mongo, load_env_doc
+    from db.mongo import get_mongo
+    from config.env import load_env_doc
     
     # Get fresh database connection
     env_doc = load_env_doc(None)
@@ -72,7 +73,8 @@ def _cached_list_conversations(_db_name: str, username: str, _cache_version: int
 @st.cache_data(ttl=5, show_spinner=False)
 def _cached_get_messages(_db_name: str, conv_id: str, limit: int, _cache_version: int) -> list[dict[str, Any]]:
     """Cached wrapper for get_messages."""
-    from db.mongo import get_mongo, load_env_doc
+    from db.mongo import get_mongo
+    from config.env import load_env_doc
     
     # Get fresh database connection
     env_doc = load_env_doc(None)
