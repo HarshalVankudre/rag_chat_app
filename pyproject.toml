@@ -22,6 +22,7 @@ docling = ">=0.5.0"
 # Switched from pinecone-client to pinecone
 pinecone = "^7.3.0"
 # Added windows-specific dependency for pinecone
+onnxruntime-gpu = "^1.23.2"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

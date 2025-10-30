@@ -154,9 +154,7 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
         if st.button(lang["admin_env_test_button"]):
             try:
                 settings = AppSettings.from_env(env_doc)
-                client = get_openai_client(
-                    settings.openai_api_key, settings.openai_base_url
-                )
+                client = get_openai_client(settings.openai_api_key, settings.openai_base_url)
                 _ = embed_texts(client, ["ping"], settings.embedding_model)
                 idx = get_pinecone_index(
                     settings.pinecone_api_key,
@@ -195,9 +193,7 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
                 elif db["users"].find_one({"username": new_u}):
                     st.warning(lang["admin_users_form_warn_user_exists"])
                 else:
-                    role_key = (
-                        "user" if role == lang["admin_users_form_role_user"] else "admin"
-                    )
+                    role_key = "user" if role == lang["admin_users_form_role_user"] else "admin"
                     msg = add_user(db, new_u.strip(), new_p.strip(), new_e.strip(), role_key)
                     if msg == "ok":
                         st.success(lang["admin_users_form_add_success"].format(new_u=new_u))
@@ -236,4 +232,3 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
 
     elif admin_sub_view == lang["admin_ingest"]:
         ingest_panel(db, env_doc, lang)
-

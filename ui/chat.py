@@ -105,16 +105,12 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
                     ):
                         new_title = st.session_state[f"rename_input_{c_id}"]
                         if new_title.strip():
-                            rename_conversation(
-                                db, c_id, username, new_title.strip()
-                            )
+                            rename_conversation(db, c_id, username, new_title.strip())
                             st.session_state.pop("editing_conv_id", None)
                             st.rerun()
                         else:
                             st.warning(lang["conv_warn_empty_title"])
-                    if col_b.form_submit_button(
-                        lang["conv_cancel"], use_container_width=True
-                    ):
+                    if col_b.form_submit_button(lang["conv_cancel"], use_container_width=True):
                         st.session_state.pop("editing_conv_id", None)
                         st.rerun()
 
@@ -176,6 +172,8 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
                         st.session_state["current_conv_id"] = c_id
                         st.session_state.pop("editing_conv_id", None)
                         st.rerun()
+
+
 def render_chat_ui(
     db: Database,
     username: str,
@@ -204,6 +202,8 @@ def render_chat_ui(
                 st.markdown(m["content"])
 
     return current_conv_id
+
+
 def process_new_message(
     db: Database,
     env_doc: dict[str, Any],
@@ -247,9 +247,7 @@ def process_new_message(
         return None
 
     try:
-        client = get_openai_client(
-            settings.openai_api_key, settings.openai_base_url
-        )
+        client = get_openai_client(settings.openai_api_key, settings.openai_base_url)
 
         qvec = embed_texts(client, [prompt], settings.embedding_model)[0]
         indexes = get_pinecone_indexes(
@@ -258,9 +256,7 @@ def process_new_message(
             settings.pinecone_index_name,
             settings.pinecone_index_names,
         )
-        matches = retrieve_from_indexes(
-            indexes, qvec, settings.top_k, settings.pinecone_namespace
-        )
+        matches = retrieve_from_indexes(indexes, qvec, settings.top_k, settings.pinecone_namespace)
         best_score = None
         for match in matches:
             sc = match.get("score")
@@ -347,9 +343,7 @@ def process_new_message(
             if show_sources and built["sources"]:
                 with st.expander(lang["chat_sources_expander"]):
                     for i, s in enumerate(built["sources"], start=1):
-                        src_label = (
-                            s.get("source") or lang["chat_sources_label_no_source"]
-                        )
+                        src_label = s.get("source") or lang["chat_sources_label_no_source"]
                         score = s.get("score")
                         try:
                             score_s = f"{float(score):.4f}" if score is not None else "n/a"
@@ -371,4 +365,3 @@ def process_new_message(
         logger.exception("Error processing new message")
         with st.chat_message("assistant"):
             st.error(f"{lang['chat_error']}: {exc}")
-

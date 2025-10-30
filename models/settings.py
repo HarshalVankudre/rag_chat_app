@@ -1,15 +1,10 @@
 """Application configuration models and helpers."""
+
 from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
 from typing import Any
-"""Application configuration models used across the Streamlit app."""
-
-from __future__ import annotations
-
-import logging
-from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -32,7 +27,6 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
 
 def default_env() -> dict[str, Any]:
     """Return the baseline environment document used throughout the app."""
-
     return {
         "_id": "global",
         # OpenAI
@@ -64,8 +58,7 @@ def default_env() -> dict[str, Any]:
         "rag_min_context_chars": 600,
         "rag_min_matches": 1,
         "rag_min_score": 0.0,
-        # --- NEW: Auth settings ---
-        # IMPORTANT: Change this in your environment.
+        # Auth
         "auth_secret_key": "your_strong_secret_key_here",
         "auth_cookie_expiry_days": 30,
     }
@@ -77,6 +70,7 @@ MISSING_PINECONE_KEY_MSG = "pinecone_api_key cannot be blank"
 
 class AppSettings(BaseModel):
     """Strongly-typed settings derived from the persisted environment document."""
+
     # OpenAI
     openai_api_key: str
     openai_base_url: str | None = None
@@ -110,22 +104,18 @@ class AppSettings(BaseModel):
     rag_min_matches: int = 1
     rag_min_score: float = 0.0
 
-    # --- NEW: Auth settings ---
+    # Auth
     auth_secret_key: str = "your_strong_secret_key_here"
     auth_cookie_expiry_days: int = 30
 
     @model_validator(mode="after")
-    def _validate_required_keys(self) -> AppSettings:
+    def _validate_required_keys(self) -> "AppSettings":
         """Validate secrets and normalise optional string fields."""
-    def _validate_required_keys(self):
-        """Validate secrets and normalise optional string fields."""
-
         if not (self.openai_api_key and self.openai_api_key.strip()):
             raise ValueError(MISSING_OPENAI_KEY_MSG)
         if not (self.pinecone_api_key and self.pinecone_api_key.strip()):
             raise ValueError(MISSING_PINECONE_KEY_MSG)
 
-        # --- NEW: Check for default secret key ---
         if self.auth_secret_key == "your_strong_secret_key_here":
             logger.warning(
                 "Using default auth_secret_key. Please set a strong secret key in your environment."
@@ -157,8 +147,8 @@ class AppSettings(BaseModel):
         return self
 
     @classmethod
-    def from_env(cls, env_doc: Mapping[str, Any]) -> AppSettings:
-        """Build an :class:`AppSettings` instance from a persisted env document."""
+    def from_env(cls, env_doc: Mapping[str, Any]) -> "AppSettings":
+        """Build an AppSettings instance from a persisted env document."""
         raw_indexes = env_doc.get("pinecone_index_names", [])
         if isinstance(raw_indexes, str):
             raw_indexes = [
@@ -173,8 +163,6 @@ class AppSettings(BaseModel):
             raw_indexes = [str(raw_indexes)]
         else:
             raw_indexes = []
-    def from_env(cls, env_doc: Mapping[str, Any]) -> "AppSettings":
-        """Build an :class:`AppSettings` instance from a persisted env document."""
 
         return cls(
             openai_api_key=env_doc.get("openai_api_key", ""),
@@ -201,4 +189,3 @@ class AppSettings(BaseModel):
             auth_secret_key=env_doc.get("auth_secret_key", "your_strong_secret_key_here"),
             auth_cookie_expiry_days=int(env_doc.get("auth_cookie_expiry_days", 30)),
         )
-

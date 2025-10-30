@@ -1,5 +1,3 @@
-"""Environment persistence and override helpers."""
-
 from __future__ import annotations
 
 import json
@@ -110,4 +108,3 @@ def save_env_doc(env_doc: Mapping[str, Any], db: Database | None = None) -> None
         logger.info("Saved environment settings to local env_settings.json.")
     except OSError as exc:
         logger.warning("Failed to save env doc to local JSON", exc_info=exc)
-
