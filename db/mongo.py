@@ -216,3 +216,63 @@ def delete_user(db: Database, username: str) -> str | None:
         logger.exception("Failed to delete user", extra={"username": username})
         return "Database error while deleting user."
     return "ok"
+
+
+def change_user_password(
+    db: Database,
+    username: str,
+    current_password: str,
+    new_password: str,
+) -> tuple[bool, str]:
+    """Verify the current password and update the stored password hash.
+
+    Returns
+    -------
+    tuple[bool, str]
+        ``(True, "ok")`` on success, otherwise ``(False, <reason>)`` where
+        ``reason`` is a machine-readable error code.
+    """
+    try:
+        user_doc = db[COL_USERS].find_one({"username": username})
+    except PyMongoError:
+        logger.exception(
+            "Failed to load user for password change",
+            extra={"username": username},
+        )
+        return False, "db_fetch_error"
+
+    if not user_doc:
+        return False, "user_not_found"
+
+    current_hash = user_doc.get("password_hash")
+    if not current_hash:
+        return False, "no_existing_password"
+
+    if not stauth.Hasher.check_pw(current_password, current_hash):
+        return False, "incorrect_current_password"
+
+    if stauth.Hasher.check_pw(new_password, current_hash):
+        return False, "password_same_as_current"
+
+    new_hash = stauth.Hasher.hash(new_password)
+    now = dt.datetime.utcnow().isoformat() + "Z"
+
+    try:
+        db[COL_USERS].update_one(
+            {"_id": user_doc["_id"]},
+            {
+                "$set": {
+                    "password_hash": new_hash,
+                    "updated_at": now,
+                    "password_changed_at": now,
+                }
+            },
+        )
+    except PyMongoError:
+        logger.exception(
+            "Failed to update password",
+            extra={"username": username},
+        )
+        return False, "db_update_error"
+
+    return True, "ok"

@@ -22,6 +22,7 @@ from db.mongo import (
 )
 from services.bootstrap import AppBootstrapResult, bootstrap_application
 from ui.admin import admin_dashboard
+from ui.change_password import render_change_password_page
 from ui.chat import process_new_message, render_chat_ui
 
 APP_TITLE = "💬 RükoGPT"
@@ -127,66 +128,6 @@ def get_auth_credentials(_db: Database) -> dict[str, Any]:
 
 def _resolve_user_role(db: Database, username: str) -> str:
     """Lookup the latest role for a user."""
-    user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
-    return user_doc_live.get("role", "user")
-
-
-def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any]) -> None:
-    """Render the authenticated portion of the UI."""
-    db = context.db
-    if db is None:
-        setup_screen(lang)
-        st.stop()
-
-    credentials = get_auth_credentials(db)
-
-    default_key = "your_strong_secret_key_here"
-    secret_key = context.env_doc.get("auth_secret_key", default_key)
-    expiry_days = int(context.env_doc.get("auth_cookie_expiry_days", 30))
-
-    if secret_key == default_key:
-        st.warning(
-            "Warning: Using default auth_secret_key. "
-            "Please set a strong secret key in your environment for security.",
-        )
-
-    authenticator = stauth.Authenticate(
-        credentials,
-        "rag_chat_cookie_v1",
-        secret_key,
-        cookie_expiry_days=expiry_days,
-    )
-
-    st.session_state.setdefault("auth_user", None)
-    st.session_state.setdefault("is_admin", False)
-
-    authenticator.login(
-        fields={
-            "Form name": lang["login_title"],
-            "Username": lang["username"],
-            "Password": lang["password"],
-            "Login": lang["login_button"],
-        },
-    )
-
-    if st.session_state.get("authentication_status"):
-        username = st.session_state["username"]
-        st.session_state["auth_user"] = username
-
-        user_role = _resolve_user_role(db, username)
-        st.session_state["is_admin"] = user_role == "admin"
-
-    logger.info(
-        "Refreshing authentication credentials cache for database '%s'.",
-        _db.name,
-    )
-    creds = fetch_all_users_for_auth(_db)
-    logger.info("Loaded %d user credential entries.", len(creds.get("usernames", {})))
-    return creds
-
-
-def _resolve_user_role(db: Database, username: str) -> str:
-    """Lookup the latest role for a user."""
 
     user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
     return user_doc_live.get("role", "user")
@@ -231,12 +172,32 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
         },
     )
 
+    password_change_notice = st.session_state.pop("password_change_notice", False)
+
     if st.session_state.get("authentication_status"):
         username = st.session_state["username"]
         st.session_state["auth_user"] = username
 
         user_role = _resolve_user_role(db, username)
         st.session_state["is_admin"] = user_role == "admin"
+
+        nav_options = [
+            lang["sidebar_nav_chat"],
+            lang["sidebar_nav_change_password"],
+        ]
+        if st.session_state.get("is_admin"):
+            nav_options.append(lang["sidebar_nav_admin"])
+
+        current_nav = st.session_state.get("main_nav")
+        if current_nav not in nav_options:
+            current_nav = nav_options[0]
+
+        def handle_password_change_success() -> None:
+            get_auth_credentials.clear()
+            st.session_state["password_change_notice"] = True
+            st.session_state["main_nav"] = lang["sidebar_nav_chat"]
+            authenticator.logout(location="unrendered")
+            st.rerun()
 
         with st.sidebar:
             st.markdown(f"### {APP_TITLE}")
@@ -246,22 +207,23 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
             )
             authenticator.logout(lang["sidebar_logout"], "sidebar")
 
-            if st.session_state.get("is_admin"):
-                st.radio(
-                    "Admin Navigation",
-                    [lang["sidebar_nav_chat"], lang["sidebar_nav_admin"]],
-                    key="admin_view",
-                    label_visibility="collapsed",
-                    index=0,
-                )
-                st.divider()
+            selected_index = nav_options.index(current_nav)
+            st.radio(
+                "Main Navigation",
+                nav_options,
+                index=selected_index,
+                key="main_nav",
+                label_visibility="collapsed",
+            )
+            st.divider()
 
-        admin_selection = st.session_state.get("admin_view", lang["sidebar_nav_chat"])
-        current_conv_id = None
-        prompt = None
+        selected_nav = st.session_state.get("main_nav", nav_options[0])
 
-        if st.session_state.get("is_admin") and admin_selection == lang["sidebar_nav_admin"]:
-            current_conv_id = render_chat_ui(
+        if (
+            selected_nav == lang["sidebar_nav_admin"]
+            and st.session_state.get("is_admin")
+        ):
+            render_chat_ui(
                 db,
                 username,
                 lang,
@@ -269,17 +231,27 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
                 render_conv_sidebar=False,
             )
             admin_dashboard(db, context.env_doc, lang)
-        else:
-            current_conv_id = render_chat_ui(
+            return
+
+        if selected_nav == lang["sidebar_nav_change_password"]:
+            render_change_password_page(
                 db,
                 username,
                 lang,
-                render_main_chat=True,
-                render_conv_sidebar=True,
+                on_success=handle_password_change_success,
             )
-            prompt = st.chat_input(
-                lang.get("chat_input_placeholder", "Ask about your documents..."),
-            )
+            return
+
+        current_conv_id = render_chat_ui(
+            db,
+            username,
+            lang,
+            render_main_chat=True,
+            render_conv_sidebar=True,
+        )
+        prompt = st.chat_input(
+            lang.get("chat_input_placeholder", "Ask about your documents..."),
+        )
 
         if prompt:
             if current_conv_id:
@@ -292,6 +264,8 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
         st.error(lang["login_error_incorrect"])
 
     else:
+        if password_change_notice:
+            st.success(lang["change_password_notice_relogin"])
         st.info(lang["login_prompt"])
 
 
