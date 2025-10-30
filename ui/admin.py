@@ -196,6 +196,8 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
                     role_key = "user" if role == lang["admin_users_form_role_user"] else "admin"
                     msg = add_user(db, new_u.strip(), new_p.strip(), new_e.strip(), role_key)
                     if msg == "ok":
+                        # Clear auth cache so the new user can login immediately
+                        st.cache_resource.clear()
                         st.success(lang["admin_users_form_add_success"].format(new_u=new_u))
                     else:
                         st.error(f"{lang['admin_users_form_add_failed']}: {msg}")
@@ -223,6 +225,8 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
                 ):
                     msg = delete_user(db, u["username"])
                     if msg == "ok":
+                        # Clear auth cache so deleted user can't login
+                        st.cache_resource.clear()
                         st.success(lang["admin_users_list_delete_success"])
                         st.rerun()
                     else:
