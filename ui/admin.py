@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 @st.cache_data(ttl=30, show_spinner=False)
 def _cached_user_list(_db_name: str, _cache_version: int) -> list[dict[str, Any]]:
     """Cached wrapper for user list."""
-    from db.mongo import get_mongo, load_env_doc
+    from db.mongo import get_mongo
+    from config.env import load_env_doc
     
     env_doc = load_env_doc(None)
     if not env_doc.get("mongo_uri"):
