@@ -6,6 +6,7 @@ import datetime as dt
 import logging
 from typing import Any
 
+import bcrypt
 import streamlit_authenticator as stauth
 from bson import ObjectId
 from pymongo import ASCENDING, MongoClient
@@ -240,8 +241,11 @@ def update_password(
     
     # Verify current password
     try:
-        hasher = stauth.Hasher()
-        if not hasher.verify(current_password, stored_hash):
+        # Convert password to bytes if it's a string
+        password_bytes = current_password.encode("utf-8") if isinstance(current_password, str) else current_password
+        hash_bytes = stored_hash.encode("utf-8") if isinstance(stored_hash, str) else stored_hash
+        
+        if not bcrypt.checkpw(password_bytes, hash_bytes):
             return "Current password is incorrect."
     except Exception as exc:
         logger.exception("Failed to verify current password", extra={"username": username})
