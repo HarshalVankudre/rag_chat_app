@@ -18,6 +18,21 @@ from .ingest import ingest_panel
 logger = logging.getLogger(__name__)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_user_list(_db_name: str, _cache_version: int) -> list[dict[str, Any]]:
+    """Cached wrapper for user list."""
+    from db.mongo import get_mongo, load_env_doc
+    
+    env_doc = load_env_doc(None)
+    if not env_doc.get("mongo_uri"):
+        return []
+    client = get_mongo(env_doc.get("mongo_uri"))
+    if not client:
+        return []
+    db = client[env_doc.get("mongo_db", "rag_chat")]
+    return list(db["users"].find({}).sort("username"))
+
+
 def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, str]) -> None:
     """Render the admin dashboard with environment, user, and ingest tools."""
     st.header(lang["admin_dashboard_title"])
@@ -198,6 +213,8 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
                     if msg == "ok":
                         # Clear auth cache so the new user can login immediately
                         st.cache_resource.clear()
+                        # Invalidate user list cache
+                        st.session_state["user_list_cache_version"] = st.session_state.get("user_list_cache_version", 0) + 1
                         st.success(lang["admin_users_form_add_success"].format(new_u=new_u))
                     else:
                         st.error(f"{lang['admin_users_form_add_failed']}: {msg}")
@@ -210,7 +227,11 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
         cols[3].markdown(lang["admin_users_col_created"])
         cols[4].markdown(lang["admin_users_col_action"])
 
-        for u in db["users"].find({}).sort("username"):
+        # Use cached user list
+        user_cache_version = st.session_state.get("user_list_cache_version", 0)
+        users = _cached_user_list(db.name, user_cache_version)
+
+        for u in users:
             cols = st.columns([2, 3, 1, 2, 1])
             cols[0].write(f"{u['username']}")
             cols[1].write(u.get("email", "—"))
@@ -227,6 +248,8 @@ def admin_dashboard(db: Database, env_doc: dict[str, Any], lang: Mapping[str, st
                     if msg == "ok":
                         # Clear auth cache so deleted user can't login
                         st.cache_resource.clear()
+                        # Invalidate user list cache
+                        st.session_state["user_list_cache_version"] = st.session_state.get("user_list_cache_version", 0) + 1
                         st.success(lang["admin_users_list_delete_success"])
                         st.rerun()
                     else:

@@ -25,6 +25,21 @@ from rag.pinecone_utils import (
 logger = logging.getLogger(__name__)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_ingest_list(_db_name: str, _cache_version: int) -> list[dict[str, Any]]:
+    """Cached wrapper for ingest list."""
+    from db.mongo import get_mongo, load_env_doc, COL_INGEST
+    
+    env_doc = load_env_doc(None)
+    if not env_doc.get("mongo_uri"):
+        return []
+    client = get_mongo(env_doc.get("mongo_uri"))
+    if not client:
+        return []
+    db = client[env_doc.get("mongo_db", "rag_chat")]
+    return list(db[COL_INGEST].find({}).sort("uploaded_at", -1))
+
+
 def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str, str]) -> None:
     """Render the ingestion workflow for uploading and indexing documents."""
     st.subheader(lang["ingest_title"])
@@ -126,6 +141,7 @@ def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str
                                 )
                                 if rec.get("vector_count", 0) > 0 and db is not None:
                                     db[COL_INGEST].insert_one(rec)
+                                    st.session_state["ingest_list_cache_version"] = st.session_state.get("ingest_list_cache_version", 0) + 1
                                     st.success(
                                         lang["ingest_status_success"].format(
                                             rec_vector_count=rec["vector_count"],
@@ -151,9 +167,12 @@ def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str
     st.markdown(lang["ingest_docs_header"])
     if db is not None:
         try:
-            cursor = db[COL_INGEST].find({}).sort("uploaded_at", -1)
+            # Use cached ingest list
+            ingest_cache_version = st.session_state.get("ingest_list_cache_version", 0)
+            ingest_records = _cached_ingest_list(db.name, ingest_cache_version)
+            
             found = False
-            for rec in cursor:
+            for rec in ingest_records:
                 found = True
                 expander_label = lang["ingest_docs_expander_label"].format(
                     filename=rec.get("filename", "(no name)"),
@@ -181,6 +200,7 @@ def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str
                                 if vec_ids:
                                     index.delete(ids=vec_ids, namespace=rec.get("namespace"))
                                 db[COL_INGEST].delete_one({"_id": rec["_id"]})
+                                st.session_state["ingest_list_cache_version"] = st.session_state.get("ingest_list_cache_version", 0) + 1
                                 st.success(lang["ingest_delete_success"])
                                 st.experimental_rerun() if hasattr(
                                     st, "experimental_rerun"
