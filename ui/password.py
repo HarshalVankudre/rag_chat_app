@@ -58,9 +58,11 @@ def change_password_page(db: Database, username: str, lang: Mapping[str, str]) -
                 return
 
             # Update password
-            result = update_password(db, username, current_password, new_password)
+            result = update_password(db, username, current_password.strip(), new_password.strip())
 
             if result == "ok":
+                # Clear auth cache so the new password is immediately available
+                st.cache_resource.clear()
                 st.success(lang["password_change_success"])
                 st.rerun()
             else:
