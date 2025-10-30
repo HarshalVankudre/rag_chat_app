@@ -1,15 +1,44 @@
-"""Document ingestion and vectorisation helpers (with RapidOCR GPU + rich logging)."""
+"""Document ingestion and vectorisation helpers (Docling + RapidOCR on GPU, rich logging).
+
+This version keeps the Docling/RapidOCR pipeline but optimises for throughput:
+- Forces ONNXRuntime GPU (CUDA) by default; optional TensorRT EP with engine caching
+- Uses RapidOCR default models by default (no local paths required)
+- Lower default rasterisation DPI (configurable)
+- Optional page-chunk parallelism for very large PDFs (uses all CPU cores/RAM)
+- fp16 on CUDA, angle classifier off by default
+- Environment-variable overrides for chunking and embedding batch size
+
+Environment knobs (all optional):
+- RAPID_OCR_REQUIRE_CUDA=1|0            # default 1 (fail fast if CUDA EP missing)
+- RAPID_OCR_PREFER_TRT=1|0              # prefer TensorRT EP (slower first run, cached later)
+- DOCLING_RENDER_DPI=230                # PDF render DPI for OCR; 200–300 is a good range
+- RAPID_OCR_USE_DEFAULT_MODELS=1|0      # default 1 (let RapidOCR use its default models)
+- RAPID_OCR_MODEL_FLAVOR=server|mobile  # if not using defaults and pointing to local models
+- RAPID_OCR_LANGS="en,de"               # if supported by your Docling build
+- RAPID_OCR_ANGLE=1|0                   # default 0 (disable angle classifier)
+- RAPID_OCR_PRECISION=fp16|fp32         # default fp16 on CUDA
+- RAPID_OCR_MAX_PAGES=<int>             # optional hard cap on pages (still Docling path)
+- DOCLING_PAR_PAGES=<int>               # split big PDFs into subsets of N pages (e.g., 25)
+- DOCLING_PAR_WORKERS=<int>             # number of parallel workers (e.g., 2 or 3)
+- CHUNK_SIZE=<int>                      # override chunk size without changing callers
+- CHUNK_OVERLAP=<int>                   # override chunk overlap
+- EMBED_BATCH=<int>                     # override embedding batch size (default 96)
+- TMPDIR=/dev/shm                       # optional on Linux to leverage RAM disk for temps
+"""
 
 from __future__ import annotations
 import io
+import json
 import logging
 import os
 import time
 import uuid
+import hashlib
 from collections.abc import Iterable
 from datetime import datetime as dt, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 # ---- Optional Docling converter import (kept lazy-safe) ----
@@ -18,18 +47,14 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     DocumentConverter = None  # type: ignore[assignment]
 
-# ---- Optional deps for fallbacks ----
+# ---- Optional deps for helpers ----
 try:
-    from pypdf import PdfReader
+    from pypdf import PdfReader, PdfWriter
     from pypdf.errors import PdfReadError
 except ImportError:  # pragma: no cover
     PdfReader = None  # type: ignore[assignment]
+    PdfWriter = None  # type: ignore[assignment]
     PdfReadError = RuntimeError  # type: ignore[assignment]
-
-try:
-    import docx  # python-docx
-except ImportError:  # pragma: no cover
-    docx = None  # type: ignore[assignment]
 
 # ---- ONNX Runtime probe (for logging) ----
 try:
@@ -52,16 +77,19 @@ from rag.pinecone_utils import embed_texts
 # ------------------ Constants & Messages ------------------
 
 PYPDF_MISSING_MSG = "pypdf is not installed"
-DOCX_MISSING_MSG = "python-docx is not installed"
 DOCLING_MISSING_MSG = "docling is not installed"
 DOCLING_EMPTY_DOC_MSG = "Docling conversion returned no document"
 
-# Default folder where you placed your three ONNX model files
-DEFAULT_MODEL_DIR = Path("ocr-models")
+DEFAULT_MODEL_DIR = Path("ocr-models")  # only used if you disable defaults
+
+# Suggest sane thread env defaults to leverage all cores for rasterisation/BLAS
+_cpu_count = os.cpu_count() or 1
+os.environ.setdefault("OMP_NUM_THREADS", str(_cpu_count))
+os.environ.setdefault("OPENBLAS_NUM_THREADS", str(_cpu_count))
+os.environ.setdefault("MKL_NUM_THREADS", str(_cpu_count))
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
-    # Safe default formatter; main app can reconfigure
     _h = logging.StreamHandler()
     _h.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(_h)
@@ -72,20 +100,17 @@ _docling_converter: DocumentConverter | None = None
 
 # ------------------ Small helpers ------------------
 
-
 def _pydantic_field_names(model_cls: Any) -> set[str]:
     """Return declared field names for Pydantic v1/v2 model classes."""
     names: set[str] = set()
     try:
-        # Pydantic v2
-        fields = getattr(model_cls, "model_fields", None)
+        fields = getattr(model_cls, "model_fields", None)  # Pydantic v2
         if fields:
             names.update(fields.keys())
     except Exception:
         pass
     try:
-        # Pydantic v1
-        fields_v1 = getattr(model_cls, "__fields__", None)
+        fields_v1 = getattr(model_cls, "__fields__", None)  # Pydantic v1
         if fields_v1:
             names.update(fields_v1.keys())
     except Exception:
@@ -123,8 +148,7 @@ def _maybe_enable_tensorrt_cache() -> None:
         os.environ.setdefault("ORT_TENSORRT_ENGINE_CACHE_PATH", ".ort_trt_cache")
 
 
-# ------------------ Docling converter (GPU RapidOCR) ------------------
-
+# ------------------ Docling converter (RapidOCR on GPU) ------------------
 
 def _get_docling_converter() -> DocumentConverter:
     """Return a shared Docling converter configured for RapidOCR (ONNXRuntime, GPU)."""
@@ -135,70 +159,108 @@ def _get_docling_converter() -> DocumentConverter:
     if _docling_converter is not None:
         return _docling_converter
 
-    # Probe ORT once (prints in logs so you can confirm GPU is available)
+    # Probe ORT / Providers
     device, providers = _probe_onnxruntime()
     logger.info("ONNXRuntime device: %s", device)
     logger.info("ONNXRuntime providers (available): %s", providers)
 
-    # Prefer CUDA over TensorRT by default (TRT can be slow on first engine build)
-    prefer_cuda = os.environ.get("RAPID_OCR_PREFER_CUDA", "1") not in ("0", "false", "False")
+    require_gpu = os.environ.get("RAPID_OCR_REQUIRE_CUDA", "1").lower() in ("1", "true", "yes")
+
+    if require_gpu and (ort is None or "CUDAExecutionProvider" not in (providers or [])):
+        raise RuntimeError(
+            "CUDAExecutionProvider not available. Install onnxruntime-gpu and NVIDIA drivers."
+        )
+
+    prefer_trt = os.environ.get("RAPID_OCR_PREFER_TRT", "0").lower() in ("1", "true", "yes")
+
     providers_kw: dict[str, Any] = {}
+    # Order providers: (TensorRT) -> CUDA -> CPU
+    if "TensorrtExecutionProvider" in (providers or []) and prefer_trt:
+        providers_kw["providers"] = [
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+        _maybe_enable_tensorrt_cache()
+    elif "CUDAExecutionProvider" in (providers or []):
+        providers_kw["providers"] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif providers:
+        providers_kw["providers"] = providers
+
+    # Import Docling options lazily and feature-detect fields
     try:
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
+        from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            RapidOcrOptions,
+        )
         from docling.document_converter import PdfFormatOption
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
             "Docling OCR pipeline options are unavailable. Ensure a compatible Docling version is installed."
         ) from exc
 
-    # Detect which fields this Docling build supports
     rapid_fields = _pydantic_field_names(RapidOcrOptions)
     pdf_fields = _pydantic_field_names(PdfPipelineOptions)
 
-    # Optional: pass providers in a feature-detected way
-    if "providers" in rapid_fields and providers:
-        if prefer_cuda and "CUDAExecutionProvider" in providers:
-            providers_kw["providers"] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        else:
-            # Keep ORT's default order
-            providers_kw["providers"] = providers
+    # Choose model paths strategy
+    use_default_models = os.environ.get("RAPID_OCR_USE_DEFAULT_MODELS", "1").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
-    # Build RapidOCR options (only include fields guaranteed by your version)
-    model_dir = DEFAULT_MODEL_DIR
     rapid_kwargs: dict[str, Any] = {
-        "backend": "onnxruntime",  # <- IMPORTANT: this is the accepted literal
-        "det_model_path": str(model_dir / "ch_PP-OCRv4_det_server_infer.onnx"),
-        "rec_model_path": str(model_dir / "ch_PP-OCRv4_rec_server_infer.onnx"),
-        "cls_model_path": str(model_dir / "ch_ppocr_mobile_v2.0_cls_infer.onnx"),
-        **providers_kw,
+        "backend": "onnxruntime",  # RapidOCR in Docling uses ORT
     }
-    # Some builds allow 'use_angle_cls' and 'precision'
+    # Only attach explicit providers if this Docling version supports it
+    if "providers" in rapid_fields and providers_kw.get("providers"):
+        rapid_kwargs["providers"] = providers_kw["providers"]
+    else:
+        if providers_kw.get("providers"):
+            logger.info("RapidOcrOptions.providers not supported by this Docling version; relying on onnxruntime-gpu defaults.")
+
+    if not use_default_models:
+        flavor = os.environ.get("RAPID_OCR_MODEL_FLAVOR", "server").lower()  # server|mobile
+        det_name = f"ch_PP-OCRv4_det_{flavor}_infer.onnx"
+        rec_name = f"ch_PP-OCRv4_rec_{flavor}_infer.onnx"
+        cls_name = "ch_ppocr_mobile_v2.0_cls_infer.onnx"
+        rapid_kwargs.update(
+            {
+                "det_model_path": str(DEFAULT_MODEL_DIR / det_name),
+                "rec_model_path": str(DEFAULT_MODEL_DIR / rec_name),
+                "cls_model_path": str(DEFAULT_MODEL_DIR / cls_name),
+            }
+        )
+    # else: let RapidOCR fetch and cache its default models
+
+    # Optional feature flags
     if "use_angle_cls" in rapid_fields:
-        rapid_kwargs["use_angle_cls"] = True
-    if "precision" in rapid_fields:
-        rapid_kwargs["precision"] = "fp32"
-    # (We intentionally skip det_db_* and languages unless your build exposes them.)
+        rapid_kwargs["use_angle_cls"] = os.environ.get("RAPID_OCR_ANGLE", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+    if "precision" in rapid_fields and ("CUDAExecutionProvider" in (providers or [])):
+        rapid_kwargs["precision"] = os.environ.get("RAPID_OCR_PRECISION", "fp16")
+    if "languages" in rapid_fields:
+        langs = os.environ.get("RAPID_OCR_LANGS")
+        if langs:
+            rapid_kwargs["languages"] = [s.strip() for s in langs.split(",") if s.strip()]
 
     ocr_opts = RapidOcrOptions(**rapid_kwargs)
 
-    # Pdf pipeline options (feature-detected)
+    # Pdf pipeline options
     pdf_kwargs: dict[str, Any] = {"ocr_options": ocr_opts}
-    # Try to set DPI to 400 for a good speed/quality balance, if supported
     if "render_dpi" in pdf_fields:
-        dpi = int(os.environ.get("DOCLING_RENDER_DPI", "400"))
+        dpi = int(os.environ.get("DOCLING_RENDER_DPI", "230"))
         pdf_kwargs["render_dpi"] = dpi
         logger.info("PDF render DPI set to %s (env DOCLING_RENDER_DPI)", dpi)
-    # Force OCR if the field exists
     if "do_ocr" in pdf_fields:
         pdf_kwargs["do_ocr"] = True
 
     pdf_opts = PdfPipelineOptions(**pdf_kwargs)
 
-    # Optional: enable TRT engine caching if TRT is around
-    _maybe_enable_tensorrt_cache()
-
-    # Build DocumentConverter
     t0 = time.time()
     _docling_converter = DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
@@ -207,8 +269,44 @@ def _get_docling_converter() -> DocumentConverter:
     return _docling_converter
 
 
-# ------------------ Doc extraction (with timings) ------------------
+# ------------------ Parallel helpers for big PDFs ------------------
 
+def _split_pdf_to_subsets(payload: bytes, pages_per_chunk: int) -> list[Path]:
+    if PdfReader is None or PdfWriter is None:
+        raise RuntimeError(PYPDF_MISSING_MSG)
+    reader = PdfReader(io.BytesIO(payload))
+    subsets: list[Path] = []
+    total = len(reader.pages)
+    for start in range(0, total, pages_per_chunk):
+        writer = PdfWriter()
+        for i in range(start, min(start + pages_per_chunk, total)):
+            writer.add_page(reader.pages[i])
+        tmp = NamedTemporaryFile(suffix=".pdf", delete=False)
+        writer.write(tmp)
+        tmp.flush(); tmp.close()
+        subsets.append(Path(tmp.name))
+    return subsets
+
+
+def _convert_subset(path: Path) -> str:
+    # NOTE: Runs in a separate process when parallelism is enabled
+    conv = _get_docling_converter()
+    res = conv.convert(path)
+    document = getattr(res, "document", None)
+    if document is None:
+        raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
+    # Prefer export_to_text for speed; fall back if not available
+    for attr in ("export_to_text", "export_to_markdown", "export_to_plaintext"):
+        exporter = getattr(document, attr, None)
+        if callable(exporter):
+            try:
+                return exporter()
+            except Exception:
+                continue
+    return str(document)
+
+
+# ------------------ Doc extraction (always Docling) ------------------
 
 @runtime_checkable
 class Uploadable(Protocol):
@@ -221,39 +319,87 @@ class Uploadable(Protocol):
 
 def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[str, str]]:
     """Extract text from arbitrary documents using Docling with OCR; logs timings."""
-    converter = _get_docling_converter()
-
-    # Best-effort page count (for progress-style logging)
-    page_count: int | None = None
-    if suffix == ".pdf" and PdfReader is not None:
+    # Optional: page cap BEFORE running conversion
+    if suffix == ".pdf" and os.environ.get("RAPID_OCR_MAX_PAGES") and PdfReader is not None:
         try:
-            page_count = len(PdfReader(io.BytesIO(payload)).pages)
+            max_pages = int(os.environ["RAPID_OCR_MAX_PAGES"])
+            reader = PdfReader(io.BytesIO(payload))
+            if len(reader.pages) > max_pages:
+                writer = PdfWriter()
+                for i in range(min(max_pages, len(reader.pages))):
+                    writer.add_page(reader.pages[i])
+                with NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_sub:
+                    writer.write(tmp_sub)
+                    tmp_path = Path(tmp_sub.name)
+                logger.info("Using first %d pages for OCR (RAPID_OCR_MAX_PAGES).", max_pages)
+                # Replace payload with subset file path
+                # Convert via Docling
+                t0 = time.time()
+                converter = _get_docling_converter()
+                result = converter.convert(tmp_path)
+                document = getattr(result, "document", None)
+                if document is None:
+                    raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
+                text: str | None = None
+                for attr in ("export_to_text", "export_to_markdown", "export_to_plaintext"):
+                    exporter = getattr(document, attr, None)
+                    if callable(exporter):
+                        try:
+                            text = exporter()
+                            break
+                        except Exception:
+                            continue
+                if not text:
+                    text = str(document)
+                logger.info("Extraction completed: %s | total=%.2fs", name, time.time() - t0)
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return [(text, f"{name}#docling")]
         except Exception:
-            page_count = None
+            pass
 
-    logger.info(
-        "Starting Docling convert: %s | pages=%s",
-        name,
-        page_count if page_count is not None else "?",
-    )
+    # Optional: parallel subsets for big PDFs to use more CPU/RAM
+    par_pages = int(os.environ.get("DOCLING_PAR_PAGES", "0") or 0)
+    par_workers = int(os.environ.get("DOCLING_PAR_WORKERS", "0") or 0)
+    if suffix == ".pdf" and par_pages > 0 and par_workers > 0 and PdfReader is not None and PdfWriter is not None:
+        subsets = _split_pdf_to_subsets(payload, par_pages)
+        texts: list[tuple[str, str]] = []
+        t0 = time.time()
+        with ProcessPoolExecutor(max_workers=par_workers) as ex:
+            futs = [ex.submit(_convert_subset, p) for p in subsets]
+            for fu in as_completed(futs):
+                txt = fu.result()
+                if txt and txt.strip():
+                    texts.append((txt, f"{name}#docling"))
+        # Cleanup temp subset files
+        for p in subsets:
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+        logger.info("Parallel extraction completed: %s | total=%.2fs (workers=%s, pages/chunk=%s)",
+                    name, time.time() - t0, par_workers, par_pages)
+        return texts if texts else [("", f"{name}")]
 
+    # Single-pass Docling conversion
     with NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as tmp:
         tmp.write(payload)
         tmp_path = Path(tmp.name)
 
     try:
         t0 = time.time()
+        converter = _get_docling_converter()
         result = converter.convert(tmp_path)
-        t1 = time.time()
-        logger.info("Docling.convert finished in %.2fs", t1 - t0)
+        logger.info("Docling.convert finished in %.2fs", time.time() - t0)
 
         document = getattr(result, "document", None)
         if document is None:
             raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
 
-        # Export text/markdown with timing
         text: str | None = None
-        for attr in ("export_to_markdown", "export_to_text", "export_to_plaintext"):
+        for attr in ("export_to_text", "export_to_markdown", "export_to_plaintext"):
             exporter = getattr(document, attr, None)
             if callable(exporter):
                 try:
@@ -261,7 +407,7 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
                     candidate = exporter()
                     t_exp1 = time.time()
                     logger.info("Document.%s finished in %.2fs", attr, t_exp1 - t_exp0)
-                except (RuntimeError, ValueError, TypeError, AttributeError) as exc:  # defensive
+                except (RuntimeError, ValueError, TypeError, AttributeError) as exc:
                     logger.debug("Docling exporter %s failed for %s", attr, name, exc_info=exc)
                     continue
                 if isinstance(candidate, str) and candidate.strip():
@@ -282,12 +428,11 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
 
 
 def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
-    """Extract text units from an uploaded file for downstream chunking."""
+    """Extract text units from an uploaded file for downstream chunking (always Docling when available)."""
     name = uploaded_file.name
     suffix = Path(name).suffix.lower()
     payload = uploaded_file.read() or b""
 
-    # Prefer Docling (with RapidOCR) for any non-trivial type
     if payload and DocumentConverter is not None:
         try:
             return _extract_with_docling(name, suffix, payload)
@@ -296,14 +441,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("Docling processing crashed for %s", name, exc_info=exc)
 
-    # Simple text-like fallbacks
-    if suffix in [".txt", ".md", ".csv", ".log"]:
-        try:
-            text = payload.decode("utf-8", errors="ignore")
-        except UnicodeDecodeError:
-            text = payload.decode("latin-1", errors="ignore")
-        return [(text, f"{name}")]
-
+    # Fallbacks only if Docling unavailable
     if suffix == ".pdf":
         if PdfReader is None:
             raise RuntimeError(PYPDF_MISSING_MSG)
@@ -314,25 +452,14 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
                 page_text = page.extract_text() or ""
             except PdfReadError as exc:
                 logger.warning(
-                    "Failed to extract text from PDF page %s of %s",
-                    i + 1,
-                    name,
-                    exc_info=exc,
+                    "Failed to extract text from PDF page %s of %s", i + 1, name, exc_info=exc
                 )
                 page_text = ""
             if page_text.strip():
                 units.append((page_text, f"{name}#page={i+1}"))
         return units or [("", f"{name}")]
 
-    if suffix == ".docx":
-        if docx is None:
-            raise RuntimeError(DOCX_MISSING_MSG)
-        document = docx.Document(io.BytesIO(payload))
-        paras = [p.text for p in document.paragraphs if p.text and p.text.strip()]
-        text = "\n".join(paras)
-        return [(text, f"{name}")]
-
-    # Fallback for unknown types
+    # Plaintext-ish
     try:
         text = payload.decode("utf-8", errors="ignore")
     except UnicodeDecodeError:
@@ -340,8 +467,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
     return [(text, f"{name}")]
 
 
-# ------------------ Context build & upsert (unchanged except logging) ------------------
-
+# ------------------ Context build & upsert ------------------
 
 def build_context(
     matches: Iterable[dict[str, Any]] | None,
@@ -396,9 +522,14 @@ def upsert_chunks(
     all_sources: list[str] = []
     vec_ids: list[str] = []
 
+    # Allow env overrides for chunking (no caller changes needed)
+    eff_chunk_size = int(os.environ.get("CHUNK_SIZE", str(chunk_size)))
+    eff_chunk_overlap = int(os.environ.get("CHUNK_OVERLAP", str(chunk_overlap)))
+    eff_chunk_overlap = max(0, min(eff_chunk_overlap, max(0, eff_chunk_size - 1)))
+
     # Chunk the input units
     for unit_text, unit_src in text_units:
-        for chunk in chunk_text(unit_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap):
+        for chunk in chunk_text(unit_text, chunk_size=eff_chunk_size, chunk_overlap=eff_chunk_overlap):
             all_chunks.append(chunk)
             all_sources.append(unit_src)
 
@@ -413,10 +544,11 @@ def upsert_chunks(
             "uploaded_at": now,
         }
 
-    # Embed in small batches to avoid rate limits
+    # Embed in batches (tunable)
+    batch = int(os.environ.get("EMBED_BATCH", "96"))
     embeddings: list[list[float]] = []
-    for i in range(0, len(all_chunks), 64):
-        sub = all_chunks[i : i + 64]
+    for i in range(0, len(all_chunks), batch):
+        sub = all_chunks[i : i + batch]
         t_embed0 = time.time()
         vecs = embed_texts(client, sub, embedding_model)
         t_embed1 = time.time()
@@ -459,8 +591,8 @@ def upsert_chunks(
     # Upsert in chunks; Index.upsert accepts list[tuple[id, values, metadata]]
     t_up0 = time.time()
     for i in range(0, len(vectors), 1000):
-        batch = vectors[i : i + 1000]
-        index.upsert(vectors=batch, namespace=ns)
+        batch_vecs = vectors[i : i + 1000]
+        index.upsert(vectors=batch_vecs, namespace=ns)
         logger.info(
             "Upserted %d/%d vectors (namespace=%s)", min(i + 1000, len(vectors)), len(vectors), ns
         )
