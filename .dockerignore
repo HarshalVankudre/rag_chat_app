@@ -20,3 +20,44 @@ build/
 Dockerfile
 .dockerignore
 README.md
+*.md
+.git/
+.gitignore
+
+# Logs and temporary files
+logs/
+*.log
+*.tmp
+
+# Documentation (keep README.md)
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Environment files (use secrets management)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini

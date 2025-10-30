@@ -316,16 +316,75 @@ ENDSSH
     fi
 }
 
+optimize_docker_for_push() {
+    print_debug "Optimizing Docker settings for faster push..."
+    
+    # Don't force BuildKit - let Docker decide or use it conditionally
+    # BuildKit can cause issues with Windows paths and cloud builders
+    # Push will still be fast as Docker pushes layers in parallel by default
+    
+    # Check if buildx is available but avoid cloud builders
+    if command -v docker &> /dev/null && docker buildx version &> /dev/null 2>&1; then
+        print_debug "Docker Buildx available"
+        # Check if default builder uses local driver (not cloud)
+        local builders=$(docker buildx ls 2>/dev/null || echo "")
+        if echo "${builders}" | grep -q "default.*docker"; then
+            print_debug "Local builder found"
+        elif echo "${builders}" | grep -q "cloud"; then
+            print_debug "Cloud builder detected - will use regular docker build"
+        fi
+    fi
+}
+
 build_docker_image() {
     print_step "Building Docker Image"
     print_info "Image: ${IMAGE_NAME}"
     print_info "This may take several minutes..."
     
+    # Optimize Docker for build and push
+    optimize_docker_for_push
+    
     local build_start=$(date +%s)
     
-    if ! docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
-        print_error "Docker build failed"
-        exit 1
+    # Default to regular docker build (most reliable)
+    # Only use buildx if explicitly requested and verified to be local
+    local use_buildx=false
+    
+    # Check if user wants to force buildx (via environment variable)
+    if [[ "${USE_BUILDX:-false}" == "true" ]]; then
+        if command -v docker &> /dev/null && docker buildx version &> /dev/null 2>&1; then
+            # Verify builder is local (not cloud)
+            local builder_info=$(docker buildx inspect --bootstrap 2>/dev/null || echo "")
+            if [[ -n "${builder_info}" ]] && ! echo "${builder_info}" | grep -qi "cloud"; then
+                use_buildx=true
+            else
+                print_warning "Buildx requested but cloud builder detected - using regular docker build"
+            fi
+        fi
+    fi
+    
+    # Try BuildKit first (much faster builds with better caching)
+    # Fallback to legacy build if BuildKit fails
+    if [[ "${use_buildx}" == "true" ]]; then
+        print_info "Using Docker Buildx for optimized build"
+        if ! docker buildx build --load -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+            print_warning "Buildx build failed, falling back to regular docker build"
+            DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}" || {
+                print_error "Docker build failed"
+                exit 1
+            }
+        fi
+    else
+        # Try BuildKit first (faster builds, better caching)
+        # Only fallback to legacy if BuildKit fails
+        print_debug "Attempting BuildKit build (faster)..."
+        if ! DOCKER_BUILDKIT=1 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+            print_warning "BuildKit build failed, falling back to legacy build engine..."
+            if ! DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+                print_error "Docker build failed with both BuildKit and legacy engine"
+                exit 1
+            fi
+        fi
     fi
     
     local build_duration=$(( $(date +%s) - build_start ))
@@ -335,46 +394,107 @@ build_docker_image() {
     add_cleanup "docker rmi ${IMAGE_NAME} || true"
 }
 
+# Helper function to format bytes to human-readable format
+format_size() {
+    local bytes=$1
+    if command -v numfmt &> /dev/null; then
+        numfmt --to=iec-i --suffix=B "${bytes}"
+    else
+        # Fallback: approximate conversion
+        if [[ ${bytes} -lt 1048576 ]]; then
+            echo "$((bytes / 1024))KB"
+        elif [[ ${bytes} -lt 1073741824 ]]; then
+            echo "$((bytes / 1024 / 1024))MB"
+        else
+            echo "$((bytes / 1024 / 1024 / 1024))GB"
+        fi
+    fi
+}
+
 push_docker_image() {
     print_step "Pushing Image to Registry"
     print_info "Registry: ${REGISTRY_BASE%%/*}"
     
+    # Optimize Docker for push
+    optimize_docker_for_push
+    
     # Get image size and layer information before push
     local image_size=$(docker image inspect "${IMAGE_NAME}" --format='{{.Size}}' 2>/dev/null || echo "0")
     if [[ "${image_size}" != "0" ]]; then
-        # Convert bytes to human-readable format
-        if command -v numfmt &> /dev/null; then
-            local size_human=$(numfmt --to=iec-i --suffix=B "${image_size}")
-        else
-            # Fallback: approximate conversion
-            local size_mb=$((image_size / 1024 / 1024))
-            local size_human="${size_mb}MB"
-        fi
-        print_info "Image size: ${size_human}"
+        print_info "Image size: $(format_size "${image_size}")"
         
         # Count layers
         local layer_count=$(docker image inspect "${IMAGE_NAME}" --format='{{len .RootFS.Layers}}' 2>/dev/null || echo "0")
         if [[ "${layer_count}" != "0" ]]; then
             print_info "Number of layers: ${layer_count}"
         fi
+        
+        # Estimate push time (rough estimate: ~10-50 MB/s depending on connection)
+        local estimated_speed_mbps=20  # Conservative estimate
+        local estimated_time=$((image_size / 1024 / 1024 / estimated_speed_mbps))
+        if [[ ${estimated_time} -gt 0 ]]; then
+            print_info "Estimated push time: ~${estimated_time} seconds (at ${estimated_speed_mbps}MB/s)"
+        fi
     fi
     
     print_info "Uploading layers (this may take a while)..."
+    print_info "Tip: Docker pushes layers in parallel for faster upload"
     local push_start=$(date +%s)
     
+    # Track current layer being pushed
+    local current_layer=""
+    local layer_num=0
+    
     # Docker push shows progress automatically
-    # We'll capture output and display it with filtering
+    # Docker already pushes layers in parallel - no special command needed
+    # Parse output to show per-layer progress with sizes
     if ! docker push "${IMAGE_NAME}" 2>&1 | tee -a "${LOG_FILE}" | while IFS= read -r line || [[ -n "${line}" ]]; do
-        # Show layer upload progress and important status lines
-        if [[ "${line}" =~ (Pushing|Layer|already exists|Preparing|Waiting|digest:|pushed|Pushed|latest|[0-9]+/[0-9]+) ]]; then
-            # Show progress lines
-            echo "  ${line}"
+        # Log everything to file
+        echo "${line}" >> "${LOG_FILE}"
+        
+        # Parse layer hash (sha256:...)
+        if [[ "${line}" =~ (sha256:[a-f0-9]+) ]]; then
+            local layer_hash="${BASH_REMATCH[1]}"
+            if [[ "${layer_hash}" != "${current_layer}" ]]; then
+                current_layer="${layer_hash}"
+                layer_num=$((layer_num + 1))
+                echo ""
+                echo -e "\033[1;34m  Layer ${layer_num}: ${layer_hash:0:19}...\033[0m"
+            fi
+        fi
+        
+        # Parse progress line with size information
+        # Format: "sha256:abc123: Pushing   [========>] 45.2MB/120.5MB" or "sha256:abc123: Pushing   45.2MB/120.5MB"
+        if [[ "${line}" =~ (Pushing|Pulling|Pulled|Pull|Waiting|Preparing|Verifying|Mounted|Already)[[:space:]]+.*([0-9]+\.[0-9]+)([KMGT]?B)/([0-9]+\.[0-9]+)([KMGT]?B) ]]; then
+            local status="${BASH_REMATCH[1]}"
+            local current="${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+            local total="${BASH_REMATCH[4]}${BASH_REMATCH[5]}"
+            
+            # Extract progress bar if present
+            local progress_bar=""
+            if [[ "${line}" =~ \[([^\]]+)\] ]]; then
+                progress_bar="${BASH_REMATCH[1]}"
+                echo -e "    \033[1;36m${status}\033[0m ${current}/${total} [${progress_bar}]"
+            else
+                echo -e "    \033[1;36m${status}\033[0m ${current}/${total}"
+            fi
+        elif [[ "${line}" =~ (Pushing|Pulling|Pulled|Pull|Waiting|Preparing|Verifying|Mounted|Already)[[:space:]]+([0-9]+\.[0-9]+)([KMGT]?B) ]]; then
+            # Single size (total size shown)
+            local status="${BASH_REMATCH[1]}"
+            local size="${BASH_REMATCH[2]}${BASH_REMATCH[3]}"
+            echo -e "    \033[1;36m${status}\033[0m ${size}"
+        elif [[ "${line}" =~ (digest:|pushed|Pushed|latest|tag:) ]]; then
+            # Success indicators
+            echo -e "    \033[1;32m✓ ${line}\033[0m"
+        elif [[ "${line}" =~ (already exists|Already exists) ]]; then
+            # Layer already exists
+            echo -e "    \033[1;33m✓ ${line}\033[0m"
         elif [[ "${line}" =~ (error|Error|ERROR|failed|Failed|denied|unauthorized) ]]; then
             # Always show errors
-            echo "  ${line}" >&2
+            echo -e "    \033[1;31m✗ ${line}\033[0m" >&2
         elif [[ "${VERBOSE}" == "true" ]]; then
             # Show all output in verbose mode
-            echo "  ${line}"
+            echo "    ${line}"
         fi
     done; then
         print_error "Docker push failed"
@@ -384,6 +504,7 @@ push_docker_image() {
     fi
     
     local push_duration=$(( $(date +%s) - push_start ))
+    echo ""
     print_success "Push completed in ${push_duration} seconds"
     
     # Show final image information
@@ -443,11 +564,59 @@ deploy_to_server() {
             print_info "No existing container found"
         fi
         
-        # Pull new image
-        print_info "Pulling new image..."
-        if ! docker pull "\${IMAGE_NAME}"; then
+        # Pull new image with progress display
+        print_info "Pulling new image: \${IMAGE_NAME}"
+        
+        # Track current layer being pulled
+        current_layer=""
+        layer_num=0
+        
+        if ! docker pull "\${IMAGE_NAME}" 2>&1 | while IFS= read -r line || [[ -n "\${line}" ]]; do
+            # Parse layer hash (sha256:...)
+            if [[ "\${line}" =~ (sha256:[a-f0-9]+) ]]; then
+                layer_hash="\${BASH_REMATCH[1]}"
+                if [[ "\${layer_hash}" != "\${current_layer}" ]]; then
+                    current_layer="\${layer_hash}"
+                    layer_num=\$((layer_num + 1))
+                    echo ""
+                    echo -e "\033[1;34m  Layer \${layer_num}: \${layer_hash:0:19}...\033[0m"
+                fi
+            fi
+            
+            # Parse progress line with size information
+            # Format: "sha256:abc123: Pulling   [========>] 45.2MB/120.5MB" or "sha256:abc123: Pulling   45.2MB/120.5MB"
+            if [[ "\${line}" =~ (Pushing|Pulling|Pulled|Pull|Waiting|Preparing|Verifying|Mounted|Already)[[:space:]]+.*([0-9]+\.[0-9]+)([KMGT]?B)/([0-9]+\.[0-9]+)([KMGT]?B) ]]; then
+                status="\${BASH_REMATCH[1]}"
+                current="\${BASH_REMATCH[2]}\${BASH_REMATCH[3]}"
+                total="\${BASH_REMATCH[4]}\${BASH_REMATCH[5]}"
+                
+                # Extract progress bar if present
+                progress_bar=""
+                if [[ "\${line}" =~ \[([^\]]+)\] ]]; then
+                    progress_bar="\${BASH_REMATCH[1]}"
+                    echo -e "    \033[1;36m\${status}\033[0m \${current}/\${total} [\${progress_bar}]"
+                else
+                    echo -e "    \033[1;36m\${status}\033[0m \${current}/\${total}"
+                fi
+            elif [[ "\${line}" =~ (Pulling|Pulled|Pull|Waiting|Preparing|Verifying|Mounted|Already)[[:space:]]+([0-9]+\.[0-9]+)([KMGT]?B) ]]; then
+                # Single size (total size shown)
+                status="\${BASH_REMATCH[1]}"
+                size="\${BASH_REMATCH[2]}\${BASH_REMATCH[3]}"
+                echo -e "    \033[1;36m\${status}\033[0m \${size}"
+            elif [[ "\${line}" =~ (digest:|pulled|Pulled|latest|tag:) ]]; then
+                # Success indicators
+                echo -e "    \033[1;32m✓ \${line}\033[0m"
+            elif [[ "\${line}" =~ (already exists|Already exists) ]]; then
+                # Layer already exists
+                echo -e "    \033[1;33m✓ \${line}\033[0m"
+            elif [[ "\${line}" =~ (error|Error|ERROR|failed|Failed|denied|unauthorized) ]]; then
+                # Always show errors
+                echo -e "    \033[1;31m✗ \${line}\033[0m" >&2
+            fi
+        done; then
             print_error "Failed to pull image: \${IMAGE_NAME}"
         fi
+        echo ""
         print_success "Image pulled successfully"
         
         # Run new container
@@ -468,7 +637,7 @@ deploy_to_server() {
         sleep 3
         
         # Verify container status
-        print_info "Verifying container status..."
+    print_info "Verifying container status..."
         if ! docker ps --filter "name=\${CONTAINER_NAME}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -q "\${CONTAINER_NAME}"; then
             print_error "Container is not running"
         fi
@@ -576,7 +745,7 @@ rollback_deployment() {
         
         echo "Rollback completed"
 ENDSSH
-    
+
     if [[ $? -eq 0 ]]; then
         print_success "Rollback completed successfully"
     else
