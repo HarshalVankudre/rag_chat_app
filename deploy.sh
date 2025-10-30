@@ -22,9 +22,18 @@ IFS=$'\n\t'        # Internal Field Separator for safer word splitting
 ###############################################################################
 
 # Docker image configuration
-export IMAGE_NAME="${IMAGE_NAME:-registry.digitalocean.com/ruekogpt1/rag-chat-app:latest}"
-export IMAGE_TAG="${IMAGE_TAG:-latest}"
 export REGISTRY_BASE="${REGISTRY_BASE:-registry.digitalocean.com/ruekogpt1/rag-chat-app}"
+# Use git commit SHA for content-addressed tagging (skip redundant deploys)
+export GIT_SHA="${GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo 'latest')}"
+export IMAGE_TAG="${IMAGE_TAG:-${GIT_SHA}}"
+export IMAGE_NAME="${IMAGE_NAME:-${REGISTRY_BASE}:${IMAGE_TAG}}"
+export IMAGE_LATEST="${IMAGE_LATEST:-${REGISTRY_BASE}:latest}"
+# Remote Buildx cache for faster builds across machines
+export CACHE_IMAGE="${CACHE_IMAGE:-${REGISTRY_BASE}:buildcache}"
+# Build optimization flags
+export USE_REMOTE_CACHE="${USE_REMOTE_CACHE:-true}"
+export BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
+export BUILD_COMPRESSION="${BUILD_COMPRESSION:-zstd:chunked}"
 
 # Server configuration
 export SERVER_USER="${SERVER_USER:-root}"
@@ -338,49 +347,84 @@ optimize_docker_for_push() {
 
 build_docker_image() {
     print_step "Building Docker Image"
-    print_info "Image: ${IMAGE_NAME}"
-    print_info "This may take several minutes..."
+    print_info "Image: ${IMAGE_NAME} (git: ${GIT_SHA})"
+    print_info "Platform: ${BUILD_PLATFORM}"
+    
+    # Check if image with this exact git SHA already exists on server (skip rebuild)
+    if [[ "${GIT_SHA}" != "latest" ]]; then
+        print_debug "Checking if image for git ${GIT_SHA} already exists on server..."
+        if ssh -o ConnectTimeout=10 "${SERVER_USER}@${SERVER_IP}" "docker images -q ${IMAGE_NAME}" 2>/dev/null | grep -q .; then
+            print_success "Image for git ${GIT_SHA} already exists on server, skipping build"
+            print_info "To force rebuild, run: git commit --amend --no-edit && ./deploy.sh"
+            return 0
+        fi
+    fi
+    
+    # Clean up Python cache files that can cause BuildKit issues
+    print_debug "Cleaning up Python cache files..."
+    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find . -type f -name "*.pyc" -delete 2>/dev/null || true
+    find . -type f -name "*.pyo" -delete 2>/dev/null || true
     
     # Optimize Docker for build and push
     optimize_docker_for_push
     
     local build_start=$(date +%s)
     
-    # Default to regular docker build (most reliable)
-    # Only use buildx if explicitly requested and verified to be local
+    # Default to using Buildx when available and local
     local use_buildx=false
-    
-    # Check if user wants to force buildx (via environment variable)
-    if [[ "${USE_BUILDX:-false}" == "true" ]]; then
-        if command -v docker &> /dev/null && docker buildx version &> /dev/null 2>&1; then
-            # Verify builder is local (not cloud)
-            local builder_info=$(docker buildx inspect --bootstrap 2>/dev/null || echo "")
-            if [[ -n "${builder_info}" ]] && ! echo "${builder_info}" | grep -qi "cloud"; then
-                use_buildx=true
-            else
-                print_warning "Buildx requested but cloud builder detected - using regular docker build"
-            fi
+    if command -v docker &> /dev/null && docker buildx version &> /dev/null 2>&1; then
+        local builder_info=$(docker buildx inspect --bootstrap 2>/dev/null || echo "")
+        if [[ -n "${builder_info}" ]] && ! echo "${builder_info}" | grep -qi "cloud"; then
+            use_buildx=true
+        else
+            print_warning "Buildx available but no local builder detected - falling back to regular docker build"
         fi
     fi
     
-    # Try BuildKit first (much faster builds with better caching)
+    # Allow users to opt out of buildx if needed
+    if [[ "${FORCE_LEGACY_BUILD:-false}" == "true" ]]; then
+        use_buildx=false
+    fi
+    
+    # Always enable BuildKit for faster builds unless explicitly disabled
+    export DOCKER_BUILDKIT=${DOCKER_BUILDKIT:-1}
+    
+    # Build cache arguments for Buildx
+    local cache_args=""
+    if [[ "${USE_REMOTE_CACHE}" == "true" ]] && [[ "${use_buildx}" == "true" ]]; then
+        print_info "Using remote cache: ${CACHE_IMAGE}"
+        cache_args="--cache-from=type=registry,ref=${CACHE_IMAGE} --cache-to=type=registry,mode=max,ref=${CACHE_IMAGE}"
+    fi
+    
+    # Try BuildKit/Buildx first (much faster builds with better caching)
     # Fallback to legacy build if BuildKit fails
     if [[ "${use_buildx}" == "true" ]]; then
-        print_info "Using Docker Buildx for optimized build"
-        if ! docker buildx build --load -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+        print_info "Using Docker Buildx with optimizations"
+        print_info "  - Remote cache: $([ "${USE_REMOTE_CACHE}" == "true" ] && echo "enabled" || echo "disabled")"
+        print_info "  - Compression: ${BUILD_COMPRESSION}"
+        
+        # Build with Buildx optimizations
+        if ! docker buildx build \
+            --platform="${BUILD_PLATFORM}" \
+            ${cache_args} \
+            --compression="${BUILD_COMPRESSION}" \
+            --load \
+            -t "${IMAGE_NAME}" \
+            -t "${IMAGE_LATEST}" \
+            . 2>&1 | tee -a "${LOG_FILE}"; then
             print_warning "Buildx build failed, falling back to regular docker build"
-            DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}" || {
+            DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" -t "${IMAGE_LATEST}" . 2>&1 | tee -a "${LOG_FILE}" || {
                 print_error "Docker build failed"
                 exit 1
             }
         fi
     else
         # Try BuildKit first (faster builds, better caching)
-        # Only fallback to legacy if BuildKit fails
-        print_debug "Attempting BuildKit build (faster)..."
-        if ! DOCKER_BUILDKIT=1 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+        print_info "Using Docker BuildKit"
+        if ! DOCKER_BUILDKIT=1 docker build -t "${IMAGE_NAME}" -t "${IMAGE_LATEST}" . 2>&1 | tee -a "${LOG_FILE}"; then
             print_warning "BuildKit build failed, falling back to legacy build engine..."
-            if ! DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" . 2>&1 | tee -a "${LOG_FILE}"; then
+            if ! DOCKER_BUILDKIT=0 docker build -t "${IMAGE_NAME}" -t "${IMAGE_LATEST}" . 2>&1 | tee -a "${LOG_FILE}"; then
                 print_error "Docker build failed with both BuildKit and legacy engine"
                 exit 1
             fi
@@ -390,8 +434,13 @@ build_docker_image() {
     local build_duration=$(( $(date +%s) - build_start ))
     print_success "Build completed in ${build_duration} seconds"
     
+    # Tag with git SHA for content-addressed caching
+    if [[ "${GIT_SHA}" != "latest" ]]; then
+        print_info "Tagged as ${IMAGE_TAG} and latest"
+    fi
+    
     # Add cleanup to remove local image if push fails
-    add_cleanup "docker rmi ${IMAGE_NAME} || true"
+    add_cleanup "docker rmi ${IMAGE_NAME} ${IMAGE_LATEST} || true"
 }
 
 # Helper function to format bytes to human-readable format
@@ -414,6 +463,20 @@ format_size() {
 push_docker_image() {
     print_step "Pushing Image to Registry"
     print_info "Registry: ${REGISTRY_BASE%%/*}"
+    print_info "Tags: ${IMAGE_TAG} (git SHA) and latest"
+    
+    # Check if this exact image already exists in registry (skip redundant push)
+    if [[ "${GIT_SHA}" != "latest" ]]; then
+        print_debug "Checking if image for git ${GIT_SHA} already exists in registry..."
+        if docker manifest inspect "${IMAGE_NAME}" &>/dev/null; then
+            print_success "Image ${IMAGE_TAG} already exists in registry, skipping push"
+            print_info "Updating latest tag..."
+            # Still update latest tag to point to this image
+            docker tag "${IMAGE_NAME}" "${IMAGE_LATEST}"
+            docker push "${IMAGE_LATEST}" 2>&1 | tee -a "${LOG_FILE}" || true
+            return 0
+        fi
+    fi
     
     # Optimize Docker for push
     optimize_docker_for_push
@@ -507,8 +570,22 @@ push_docker_image() {
     echo ""
     print_success "Push completed in ${push_duration} seconds"
     
+    # Also push latest tag (will reuse layers, very fast)
+    if [[ "${IMAGE_TAG}" != "latest" ]]; then
+        print_info "Updating latest tag..."
+        local latest_push_start=$(date +%s)
+        if docker push "${IMAGE_LATEST}" 2>&1 | tee -a "${LOG_FILE}"; then
+            local latest_push_duration=$(( $(date +%s) - latest_push_start ))
+            print_success "Latest tag updated in ${latest_push_duration} seconds"
+        else
+            print_warning "Failed to push latest tag (non-critical)"
+        fi
+    fi
+    
     # Show final image information
-    print_info "Image pushed successfully: ${IMAGE_NAME}"
+    print_info "Image pushed successfully:"
+    print_info "  - ${IMAGE_NAME} (git SHA)"
+    print_info "  - ${IMAGE_LATEST} (latest)"
 }
 
 deploy_to_server() {

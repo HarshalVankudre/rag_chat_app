@@ -23,28 +23,19 @@ RUN poetry config virtualenvs.in-project true
 # Create venv first (needed for installing torch into it)
 RUN python -m venv /app/.venv
 
-# Install CPU-only PyTorch FIRST into the venv (before poetry install)
-# This prevents poetry from pulling GPU/CUDA packages
-# This layer is cached unless PyTorch versions change
-RUN /app/.venv/bin/pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu \
-    torch==2.5.0+cpu \
-    torchvision==0.20.0+cpu
-
-# Export requirements and install without torch/torchvision (already installed)
-# Poetry will try to install torch, so we use pip directly with filtered requirements
-# This layer is cached unless other dependencies change
-RUN poetry export --without-hashes --only=main -f requirements.txt -o /tmp/requirements.txt && \
-    # Remove torch and torchvision lines (they're already installed as CPU-only)
-    # Also remove any NVIDIA packages that might be listed
-    grep -vE "^torch==|^torchvision==|^nvidia-" /tmp/requirements.txt > /tmp/requirements_filtered.txt && \
-    # Install remaining dependencies into venv (no torch, so no NVIDIA packages)
-    /app/.venv/bin/pip install --no-cache-dir -r /tmp/requirements_filtered.txt && \
-    # Verify CPU-only PyTorch is installed (no NVIDIA packages)
+# Install dependencies directly with Poetry (CPU-only torch pinned in pyproject)
+# Using --sync keeps the virtualenv lean and reproducible
+RUN poetry install --only main --no-root --sync && \
+    # Verify CPU-only PyTorch is installed (no GPU acceleration available)
     /app/.venv/bin/python -c "import torch; assert not torch.cuda.is_available(), 'CUDA should not be available'; print(f'✓ PyTorch {torch.__version__} (CPU-only)')" && \
-    # Verify no NVIDIA packages were installed
-    (/app/.venv/bin/pip list | grep -i nvidia && echo "ERROR: NVIDIA packages found!" && exit 1 || echo "✓ No NVIDIA packages") && \
-    # Clean up temp files
-    rm -f /tmp/requirements.txt /tmp/requirements_filtered.txt
+    # Ensure no NVIDIA packages slipped in
+    if /app/.venv/bin/pip list | grep -iq '^nvidia'; then \
+        echo 'ERROR: NVIDIA packages found!' >&2 && exit 1; \
+    else \
+        echo '✓ No NVIDIA packages'; \
+    fi && \
+    # Clean up Poetry caches
+    rm -rf /root/.cache/pypoetry /root/.cache/pip
 
 # ---- STAGE 2: The Final Image ----
 # Use a slim image for the final, lightweight container (CPU-only, no GPU dependencies)
