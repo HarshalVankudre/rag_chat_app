@@ -1,11 +1,30 @@
+# Core dependencies
 streamlit>=1.36
 openai>=1.40.0
-pinecone>=5.0.0
 pydantic>=2.5.0
-pypdf>=4.0.0
-python-docx>=1.0.0
+
+# Database
 pymongo>=4.7.3
 dnspython>=2.6.1
+
+# Authentication
 streamlit-authenticator>=0.3.0
 bcrypt>=4.0.0
+
+# Vector database
+pinecone>=7.3.0
+
+# Document processing (CPU-only)
+pypdf>=4.0.0
+
+# CPU-only PyTorch (prevents NVIDIA/CUDA dependencies - install from PyTorch CPU index)
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple
+torch>=2.5.0
+torchvision>=0.20.0
+
+# Document parsing with OCR (depends on CPU-only torch above)
 docling>=0.5.0
+
+# CPU-only ONNX Runtime
+onnxruntime>=1.23.2
