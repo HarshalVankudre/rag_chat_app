@@ -12,6 +12,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from models.settings import AppSettings, default_env  # noqa: E402
+from models.settings import AppSettings, default_env
 
 
 def _minimal_env() -> dict[str, str]:

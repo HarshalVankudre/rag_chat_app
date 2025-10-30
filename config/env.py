@@ -52,6 +52,7 @@ def _overrides_from_os_env() -> dict[str, Any]:
                 out[key] = parts
             else:
                 out[key] = str(value).strip()
+            out[key] = str(value).strip()
     return out
 
 

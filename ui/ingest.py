@@ -32,7 +32,26 @@ def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str
     env_now = load_env_doc(db) if db is not None else env_doc
     try:
         settings = AppSettings.from_env(env_now)
-    except (ValidationError, ValueError) as exc:
+    except (ValidationError, ValueError):
+        settings = AppSettings(
+            openai_api_key=env_now.get("openai_api_key", ""),
+            openai_base_url=(env_now.get("openai_base_url") or None),
+            openai_model=env_now.get("openai_model", "gpt-4o-mini"),
+            embedding_model=env_now.get("embedding_model", "text-embedding-3-small"),
+            pinecone_api_key=env_now.get("pinecone_api_key", ""),
+            pinecone_index_name=(env_now.get("pinecone_index_name") or None),
+            pinecone_host=(env_now.get("pinecone_host") or None),
+            pinecone_namespace=(env_now.get("pinecone_namespace") or None),
+            top_k=int(env_now.get("top_k", 5)),
+            temperature=float(env_now.get("temperature", 0.2)),
+            max_context_chars=int(env_now.get("max_context_chars", 8000)),
+            metadata_text_key=env_now.get("metadata_text_key", "text"),
+            metadata_source_key=env_now.get("metadata_source_key", "source"),
+            system_prompt=env_now.get("system_prompt", DEFAULT_CHAT_SYSTEM_PROMPT),
+            mongo_uri=env_now.get("mongo_uri"),
+            mongo_db=env_now.get("mongo_db", "rag_chat"),
+        )
+    except ValidationError as exc:
         logger.exception("Ingestion panel failed to load settings")
         st.error(lang["ingest_error_env_not_configured"])
         st.exception(exc)
