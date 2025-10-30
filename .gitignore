@@ -14,7 +14,6 @@ Thumbs.db
 .vscode/
 dist/
 build/
-deploy.sh
 ocr-models/
 *.egg-info/" > .gitignore
 
