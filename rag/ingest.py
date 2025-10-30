@@ -1,31 +1,41 @@
-"""Document ingestion and vectorisation helpers."""
+"""Document ingestion and vectorisation helpers (with RapidOCR GPU + rich logging)."""
 
 from __future__ import annotations
-
 import io
 import logging
+import os
+import time
 import uuid
 from collections.abc import Iterable
-from datetime import datetime as dt
-from datetime import timezone
+from datetime import datetime as dt, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+# ---- Optional Docling converter import (kept lazy-safe) ----
 try:
     from docling.document_converter import DocumentConverter
 except ImportError:  # pragma: no cover - optional dependency
-    DocumentConverter = None
+    DocumentConverter = None  # type: ignore[assignment]
+
+# ---- Optional deps for fallbacks ----
 try:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
-except ImportError:  # pragma: no cover - optional dependency
-    PdfReader = None
-    PdfReadError = RuntimeError
+except ImportError:  # pragma: no cover
+    PdfReader = None  # type: ignore[assignment]
+    PdfReadError = RuntimeError  # type: ignore[assignment]
+
 try:
-    import docx
-except ImportError:  # pragma: no cover - optional dependency
-    docx = None
+    import docx  # python-docx
+except ImportError:  # pragma: no cover
+    docx = None  # type: ignore[assignment]
+
+# ---- ONNX Runtime probe (for logging) ----
+try:
+    import onnxruntime as ort  # type: ignore
+except Exception:  # pragma: no cover
+    ort = None  # type: ignore
 
 from openai import OpenAI
 
@@ -35,15 +45,169 @@ if TYPE_CHECKING:
 else:
     Index = Any  # type: ignore[misc,assignment]
 
-# Prefer package-absolute import; avoids IDE resolution issues in some setups.
-from rag.pinecone_utils import embed_texts
 from utils.chunk import chunk_text
 from utils.ids import pinecone_safe_slug, sanitize_namespace
+from rag.pinecone_utils import embed_texts
+
+# ------------------ Constants & Messages ------------------
 
 PYPDF_MISSING_MSG = "pypdf is not installed"
 DOCX_MISSING_MSG = "python-docx is not installed"
 DOCLING_MISSING_MSG = "docling is not installed"
 DOCLING_EMPTY_DOC_MSG = "Docling conversion returned no document"
+
+# Default folder where you placed your three ONNX model files
+DEFAULT_MODEL_DIR = Path("ocr-models")
+
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    # Safe default formatter; main app can reconfigure
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+    logger.addHandler(_h)
+    logger.setLevel(logging.INFO)
+
+_docling_converter: DocumentConverter | None = None
+
+
+# ------------------ Small helpers ------------------
+
+
+def _pydantic_field_names(model_cls: Any) -> set[str]:
+    """Return declared field names for Pydantic v1/v2 model classes."""
+    names: set[str] = set()
+    try:
+        # Pydantic v2
+        fields = getattr(model_cls, "model_fields", None)
+        if fields:
+            names.update(fields.keys())
+    except Exception:
+        pass
+    try:
+        # Pydantic v1
+        fields_v1 = getattr(model_cls, "__fields__", None)
+        if fields_v1:
+            names.update(fields_v1.keys())
+    except Exception:
+        pass
+    return names
+
+
+def _probe_onnxruntime() -> tuple[str, list[str]]:
+    """Return (device, providers) for log visibility."""
+    if ort is None:
+        return ("N/A", [])
+    device = "UNKNOWN"
+    providers: list[str] = []
+    try:
+        device = ort.get_device()
+    except Exception:
+        pass
+    try:
+        providers = list(ort.get_available_providers() or [])
+    except Exception:
+        pass
+    return (device, providers)
+
+
+def _maybe_enable_tensorrt_cache() -> None:
+    """Enable TensorRT engine caching if TRT is present and env not set."""
+    if ort is None:
+        return
+    try:
+        providers = ort.get_available_providers()
+    except Exception:
+        providers = []
+    if "TensorrtExecutionProvider" in providers:
+        os.environ.setdefault("ORT_TENSORRT_ENGINE_CACHE_ENABLE", "1")
+        os.environ.setdefault("ORT_TENSORRT_ENGINE_CACHE_PATH", ".ort_trt_cache")
+
+
+# ------------------ Docling converter (GPU RapidOCR) ------------------
+
+
+def _get_docling_converter() -> DocumentConverter:
+    """Return a shared Docling converter configured for RapidOCR (ONNXRuntime, GPU)."""
+    if DocumentConverter is None:  # pragma: no cover - optional dependency
+        raise RuntimeError(DOCLING_MISSING_MSG)
+
+    global _docling_converter
+    if _docling_converter is not None:
+        return _docling_converter
+
+    # Probe ORT once (prints in logs so you can confirm GPU is available)
+    device, providers = _probe_onnxruntime()
+    logger.info("ONNXRuntime device: %s", device)
+    logger.info("ONNXRuntime providers (available): %s", providers)
+
+    # Prefer CUDA over TensorRT by default (TRT can be slow on first engine build)
+    prefer_cuda = os.environ.get("RAPID_OCR_PREFER_CUDA", "1") not in ("0", "false", "False")
+    providers_kw: dict[str, Any] = {}
+    try:
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions, RapidOcrOptions
+        from docling.document_converter import PdfFormatOption
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "Docling OCR pipeline options are unavailable. Ensure a compatible Docling version is installed."
+        ) from exc
+
+    # Detect which fields this Docling build supports
+    rapid_fields = _pydantic_field_names(RapidOcrOptions)
+    pdf_fields = _pydantic_field_names(PdfPipelineOptions)
+
+    # Optional: pass providers in a feature-detected way
+    if "providers" in rapid_fields and providers:
+        if prefer_cuda and "CUDAExecutionProvider" in providers:
+            providers_kw["providers"] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        else:
+            # Keep ORT's default order
+            providers_kw["providers"] = providers
+
+    # Build RapidOCR options (only include fields guaranteed by your version)
+    model_dir = DEFAULT_MODEL_DIR
+    rapid_kwargs: dict[str, Any] = {
+        "backend": "onnxruntime",  # <- IMPORTANT: this is the accepted literal
+        "det_model_path": str(model_dir / "ch_PP-OCRv4_det_server_infer.onnx"),
+        "rec_model_path": str(model_dir / "ch_PP-OCRv4_rec_server_infer.onnx"),
+        "cls_model_path": str(model_dir / "ch_ppocr_mobile_v2.0_cls_infer.onnx"),
+        **providers_kw,
+    }
+    # Some builds allow 'use_angle_cls' and 'precision'
+    if "use_angle_cls" in rapid_fields:
+        rapid_kwargs["use_angle_cls"] = True
+    if "precision" in rapid_fields:
+        rapid_kwargs["precision"] = "fp32"
+    # (We intentionally skip det_db_* and languages unless your build exposes them.)
+
+    ocr_opts = RapidOcrOptions(**rapid_kwargs)
+
+    # Pdf pipeline options (feature-detected)
+    pdf_kwargs: dict[str, Any] = {"ocr_options": ocr_opts}
+    # Try to set DPI to 400 for a good speed/quality balance, if supported
+    if "render_dpi" in pdf_fields:
+        dpi = int(os.environ.get("DOCLING_RENDER_DPI", "400"))
+        pdf_kwargs["render_dpi"] = dpi
+        logger.info("PDF render DPI set to %s (env DOCLING_RENDER_DPI)", dpi)
+    # Force OCR if the field exists
+    if "do_ocr" in pdf_fields:
+        pdf_kwargs["do_ocr"] = True
+
+    pdf_opts = PdfPipelineOptions(**pdf_kwargs)
+
+    # Optional: enable TRT engine caching if TRT is around
+    _maybe_enable_tensorrt_cache()
+
+    # Build DocumentConverter
+    t0 = time.time()
+    _docling_converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_opts)}
+    )
+    logger.info("DocumentConverter built in %.2fs", time.time() - t0)
+    return _docling_converter
+
+
+# ------------------ Doc extraction (with timings) ------------------
 
 
 @runtime_checkable
@@ -52,58 +216,69 @@ class Uploadable(Protocol):
 
     name: str
 
-    def read(self) -> bytes:
-        """Return the raw file contents."""
-
-
-logger = logging.getLogger(__name__)
-
-_docling_converter: DocumentConverter | None = None
-
-
-def _get_docling_converter() -> DocumentConverter:
-    """Return a shared Docling converter instance."""
-    if DocumentConverter is None:  # pragma: no cover - optional dependency
-        raise RuntimeError(DOCLING_MISSING_MSG)
-
-    global _docling_converter
-    if _docling_converter is None:
-        _docling_converter = DocumentConverter()
-    return _docling_converter
+    def read(self) -> bytes: ...
 
 
 def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[str, str]]:
-    """Extract text from arbitrary documents using Docling when available."""
+    """Extract text from arbitrary documents using Docling with OCR; logs timings."""
     converter = _get_docling_converter()
+
+    # Best-effort page count (for progress-style logging)
+    page_count: int | None = None
+    if suffix == ".pdf" and PdfReader is not None:
+        try:
+            page_count = len(PdfReader(io.BytesIO(payload)).pages)
+        except Exception:
+            page_count = None
+
+    logger.info(
+        "Starting Docling convert: %s | pages=%s",
+        name,
+        page_count if page_count is not None else "?",
+    )
+
     with NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as tmp:
         tmp.write(payload)
         tmp_path = Path(tmp.name)
+
     try:
+        t0 = time.time()
         result = converter.convert(tmp_path)
+        t1 = time.time()
+        logger.info("Docling.convert finished in %.2fs", t1 - t0)
+
+        document = getattr(result, "document", None)
+        if document is None:
+            raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
+
+        # Export text/markdown with timing
+        text: str | None = None
+        for attr in ("export_to_markdown", "export_to_text", "export_to_plaintext"):
+            exporter = getattr(document, attr, None)
+            if callable(exporter):
+                try:
+                    t_exp0 = time.time()
+                    candidate = exporter()
+                    t_exp1 = time.time()
+                    logger.info("Document.%s finished in %.2fs", attr, t_exp1 - t_exp0)
+                except (RuntimeError, ValueError, TypeError, AttributeError) as exc:  # defensive
+                    logger.debug("Docling exporter %s failed for %s", attr, name, exc_info=exc)
+                    continue
+                if isinstance(candidate, str) and candidate.strip():
+                    text = candidate
+                    break
+
+        if not text:
+            text = str(document)
+
+        logger.info("Extraction completed: %s | total=%.2fs", name, time.time() - t0)
+        return [(text, f"{name}#docling")]
+
     finally:
-        tmp_path.unlink(missing_ok=True)
-
-    document = getattr(result, "document", None)
-    if document is None:
-        raise RuntimeError(DOCLING_EMPTY_DOC_MSG)
-
-    text: str | None = None
-    for attr in ("export_to_markdown", "export_to_text", "export_to_plaintext"):
-        exporter = getattr(document, attr, None)
-        if callable(exporter):
-            try:
-                candidate = exporter()
-            except (RuntimeError, ValueError, TypeError, AttributeError) as exc:  # defensive
-                logger.debug("Docling exporter %s failed for %s", attr, name, exc_info=exc)
-                continue
-            if isinstance(candidate, str) and candidate.strip():
-                text = candidate
-                break
-
-    if not text:
-        text = str(document)
-
-    return [(text, f"{name}#docling")]
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
@@ -112,6 +287,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
     suffix = Path(name).suffix.lower()
     payload = uploaded_file.read() or b""
 
+    # Prefer Docling (with RapidOCR) for any non-trivial type
     if payload and DocumentConverter is not None:
         try:
             return _extract_with_docling(name, suffix, payload)
@@ -120,6 +296,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("Docling processing crashed for %s", name, exc_info=exc)
 
+    # Simple text-like fallbacks
     if suffix in [".txt", ".md", ".csv", ".log"]:
         try:
             text = payload.decode("utf-8", errors="ignore")
@@ -161,6 +338,9 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
     except UnicodeDecodeError:
         text = payload.decode("latin-1", errors="ignore")
     return [(text, f"{name}")]
+
+
+# ------------------ Context build & upsert (unchanged except logging) ------------------
 
 
 def build_context(
@@ -209,7 +389,7 @@ def upsert_chunks(
     md_source_key: str,
 ) -> dict[str, Any]:
     """Chunk, embed, and upsert document text into Pinecone."""
-    # Use timezone-aware UTC datetimes; preferred over utcnow().
+    t0 = time.time()
     now = dt.now(timezone.utc).isoformat()
     doc_id = f"{pinecone_safe_slug(filename)}-{uuid.uuid4().hex[:8]}"
     all_chunks: list[str] = []
@@ -237,7 +417,10 @@ def upsert_chunks(
     embeddings: list[list[float]] = []
     for i in range(0, len(all_chunks), 64):
         sub = all_chunks[i : i + 64]
+        t_embed0 = time.time()
         vecs = embed_texts(client, sub, embedding_model)
+        t_embed1 = time.time()
+        logger.info("Embedded %d chunks in %.2fs", len(sub), t_embed1 - t_embed0)
         embeddings.extend(vecs)
 
     def json_safe(meta: dict[str, Any]) -> dict[str, Any]:
@@ -245,8 +428,8 @@ def upsert_chunks(
         out: dict[str, Any] = {}
         for key, value in meta.items():
             if value is None:
-                continue  # omit nulls entirely
-            if isinstance(value, str | int | float | bool):
+                continue
+            if isinstance(value, (str, int, float, bool)):
                 out[key] = value
             else:
                 out[key] = str(value)
@@ -269,14 +452,21 @@ def upsert_chunks(
         if index_name:  # only include when present (avoid null metadata)
             meta_raw["index_name"] = index_name
 
-        meta = json_safe(meta_raw)
-        vectors.append((vid, [float(x) for x in embedding], meta))
+        md = json_safe(meta_raw)
+        vectors.append((vid, [float(x) for x in embedding], md))
         vec_ids.append(vid)
 
     # Upsert in chunks; Index.upsert accepts list[tuple[id, values, metadata]]
+    t_up0 = time.time()
     for i in range(0, len(vectors), 1000):
-        index.upsert(vectors=vectors[i : i + 1000], namespace=ns)
+        batch = vectors[i : i + 1000]
+        index.upsert(vectors=batch, namespace=ns)
+        logger.info(
+            "Upserted %d/%d vectors (namespace=%s)", min(i + 1000, len(vectors)), len(vectors), ns
+        )
+    logger.info("Upsert finished in %.2fs", time.time() - t_up0)
 
+    logger.info("Full ingest for %s completed in %.2fs", filename, time.time() - t0)
     return {
         "doc_id": doc_id,
         "filename": filename,

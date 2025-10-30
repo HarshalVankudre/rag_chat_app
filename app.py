@@ -176,7 +176,6 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
         user_role = _resolve_user_role(db, username)
         st.session_state["is_admin"] = user_role == "admin"
 
-
     logger.info(
         "Refreshing authentication credentials cache for database '%s'.",
         _db.name,
@@ -241,9 +240,7 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
 
         with st.sidebar:
             st.markdown(f"### {APP_TITLE}")
-            admin_label = (
-                f"({lang['sidebar_admin']})" if st.session_state.get("is_admin") else ""
-            )
+            admin_label = f"({lang['sidebar_admin']})" if st.session_state.get("is_admin") else ""
             st.success(
                 f"{lang['sidebar_signed_in_as']} **{username}** {admin_label}",
             )

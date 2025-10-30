@@ -141,9 +141,7 @@ def delete_conversation(db: Database, conv_id: str, username: str) -> None:
     db[COL_CONV].delete_one({"_id": ObjectId(conv_id), "user": username})
 
 
-def add_message(
-    db: Database, conv_id: str, username: str, role: str, content: str
-) -> str:
+def add_message(db: Database, conv_id: str, username: str, role: str, content: str) -> str:
     """Persist a chat message and update conversation metadata."""
     now = dt.datetime.utcnow().isoformat() + "Z"
     doc = {
@@ -164,12 +162,7 @@ def add_message(
 def get_messages(db: Database, conv_id: str, limit: int = 80) -> list[dict[str, Any]]:
     """Return messages for a conversation up to ``limit`` items."""
     try:
-        messages = list(
-            db[COL_MSG]
-            .find({"conv_id": conv_id})
-            .sort("created_at", 1)
-            .limit(limit)
-        )
+        messages = list(db[COL_MSG].find({"conv_id": conv_id}).sort("created_at", 1).limit(limit))
     except PyMongoError:
         logger.exception("Failed to fetch messages", extra={"conv_id": conv_id})
         return []
@@ -223,4 +216,3 @@ def delete_user(db: Database, username: str) -> str | None:
         logger.exception("Failed to delete user", extra={"username": username})
         return "Database error while deleting user."
     return "ok"
-
