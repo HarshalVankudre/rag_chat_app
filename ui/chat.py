@@ -53,8 +53,45 @@ def find_last_user_question(history_docs: Iterable[dict[str, Any]]) -> str | Non
     return None
 
 
+@st.cache_data(ttl=10, show_spinner=False)
+def _cached_list_conversations(_db_name: str, username: str, _cache_version: int) -> list[dict[str, Any]]:
+    """Cached wrapper for list_conversations."""
+    from db.mongo import get_mongo, load_env_doc
+    
+    # Get fresh database connection
+    env_doc = load_env_doc(None)
+    if not env_doc.get("mongo_uri"):
+        return []
+    client = get_mongo(env_doc.get("mongo_uri"))
+    if not client:
+        return []
+    db = client[env_doc.get("mongo_db", "rag_chat")]
+    return list_conversations(db, username)
+
+
+@st.cache_data(ttl=5, show_spinner=False)
+def _cached_get_messages(_db_name: str, conv_id: str, limit: int, _cache_version: int) -> list[dict[str, Any]]:
+    """Cached wrapper for get_messages."""
+    from db.mongo import get_mongo, load_env_doc
+    
+    # Get fresh database connection
+    env_doc = load_env_doc(None)
+    if not env_doc.get("mongo_uri"):
+        return []
+    client = get_mongo(env_doc.get("mongo_uri"))
+    if not client:
+        return []
+    db = client[env_doc.get("mongo_db", "rag_chat")]
+    return get_messages(db, conv_id, limit)
+
+
 def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) -> None:
     """Render the conversation list and controls in the sidebar."""
+    # Track cache invalidation
+    cache_key = f"conv_cache_{username}"
+    if "invalidate_conv_cache" not in st.session_state:
+        st.session_state["invalidate_conv_cache"] = False
+    
     with st.sidebar:
         st.header(lang["conv_header"])
 
@@ -63,16 +100,26 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
             st.session_state["current_conv_id"] = cid
             st.session_state.pop("editing_conv_id", None)
             st.session_state.pop("confirm_delete_id", None)
+            st.session_state["invalidate_conv_cache"] = True
             st.rerun()
 
         st.divider()
 
-        convs = list_conversations(db, username)
+        # Use cached conversations with version tracking
+        cache_version = st.session_state.get("conv_cache_version", 0)
+        if st.session_state.get("invalidate_conv_cache", False):
+            # Bump version to invalidate cache
+            st.session_state["conv_cache_version"] = cache_version + 1
+            st.session_state["invalidate_conv_cache"] = False
+            cache_version = st.session_state["conv_cache_version"]
+        
+        convs = _cached_list_conversations(db.name, username, cache_version)
 
         if "current_conv_id" not in st.session_state:
             if not convs:
                 cid = create_conversation(db, username, "New chat")
                 st.session_state["current_conv_id"] = cid
+                st.session_state["invalidate_conv_cache"] = True
                 st.rerun()
             else:
                 st.session_state["current_conv_id"] = convs[0]["id"]
@@ -107,6 +154,7 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
                         if new_title.strip():
                             rename_conversation(db, c_id, username, new_title.strip())
                             st.session_state.pop("editing_conv_id", None)
+                            st.session_state["invalidate_conv_cache"] = True
                             st.rerun()
                         else:
                             st.warning(lang["conv_warn_empty_title"])
@@ -127,6 +175,7 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
                     st.session_state.pop("confirm_delete_id", None)
                     if st.session_state.get("current_conv_id") == c_id:
                         st.session_state["current_conv_id"] = None
+                    st.session_state["invalidate_conv_cache"] = True
                     st.rerun()
                 if col_b.button(
                     lang["conv_cancel"],
@@ -149,6 +198,8 @@ def conversations_sidebar(db: Database, username: str, lang: Mapping[str, str]) 
                         st.session_state["current_conv_id"] = c_id
                         st.session_state.pop("editing_conv_id", None)
                         st.session_state.pop("confirm_delete_id", None)
+                        # Invalidate message cache when switching conversations
+                        st.session_state["msg_cache_version"] = st.session_state.get("msg_cache_version", 0) + 1
                         st.rerun()
 
                 with col2, st.popover("...", use_container_width=False):
@@ -193,13 +244,26 @@ def render_chat_ui(
         if not current_conv_id:
             st.info(lang["chat_no_conv_selected"])
             if st.button(lang["chat_reload_convs"]):
+                st.session_state["invalidate_conv_cache"] = True
                 st.rerun()
             return None
 
-        existing_msgs = get_messages(db, current_conv_id, limit=200)
-        for m in existing_msgs:
-            with st.chat_message("user" if m["role"] == "user" else "assistant"):
-                st.markdown(m["content"])
+        # Use cached messages with version tracking
+        msg_cache_version = st.session_state.get("msg_cache_version", 0)
+        if st.session_state.get("invalidate_msg_cache", False):
+            # Bump version to invalidate cache
+            st.session_state["msg_cache_version"] = msg_cache_version + 1
+            st.session_state["invalidate_msg_cache"] = False
+            msg_cache_version = st.session_state["msg_cache_version"]
+        
+        existing_msgs = _cached_get_messages(db.name, current_conv_id, 200, msg_cache_version)
+        
+        # Use container for messages to optimize rendering
+        messages_container = st.container()
+        with messages_container:
+            for m in existing_msgs:
+                with st.chat_message("user" if m["role"] == "user" else "assistant"):
+                    st.markdown(m["content"])
 
     return current_conv_id
 
@@ -217,9 +281,14 @@ def process_new_message(
         return None
 
     add_message(db, current_conv_id, username, "user", prompt)
+    # Invalidate caches after adding message
+    st.session_state["invalidate_msg_cache"] = True
+    st.session_state["invalidate_conv_cache"] = True
+    
     with st.chat_message("user"):
         st.markdown(prompt)  # User prompt is NOT translated
 
+    # Get fresh messages for context (bypass cache for processing)
     history_docs = get_messages(db, current_conv_id, limit=400)
     history = [{"role": h["role"], "content": h["content"]} for h in history_docs]
     recent_history = history[-MAX_TURNS:]
@@ -233,6 +302,8 @@ def process_new_message(
                 msg = lang["chat_last_q_not_found"]
             st.markdown(msg)
             add_message(db, current_conv_id, username, "assistant", msg)
+            st.session_state["invalidate_msg_cache"] = True
+            st.session_state["invalidate_conv_cache"] = True
         return
 
     env_doc = load_env_doc(db) if db is not None else env_doc
@@ -339,6 +410,9 @@ def process_new_message(
             add_message(
                 db, current_conv_id, username, "assistant", full
             )  # AI response is NOT translated
+            # Invalidate caches after adding message
+            st.session_state["invalidate_msg_cache"] = True
+            st.session_state["invalidate_conv_cache"] = True
 
             if show_sources and built["sources"]:
                 with st.expander(lang["chat_sources_expander"]):
