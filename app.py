@@ -47,11 +47,16 @@ def initialize_language() -> dict[str, Any]:
         st.session_state["lang_code"] = "en"
 
     with st.sidebar:
-        st.selectbox(
+        current_lang = st.session_state.get("lang_code", "en")
+        lang_options = [("en", "🇬🇧 English"), ("de", "🇩🇪 Deutsch")]
+        current_index = 0 if current_lang == "en" else 1
+        
+        selected = st.selectbox(
             label="Language / Sprache",
-            options=[("en", "🇬🇧 English"), ("de", "🇩🇪 Deutsch")],
+            options=lang_options,
             format_func=lambda x: x[1],
             key="lang_select_key",
+            index=current_index,
             on_change=lambda: st.session_state.update(
                 lang_code=st.session_state.lang_select_key[0],
             ),
