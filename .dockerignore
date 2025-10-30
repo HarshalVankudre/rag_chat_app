@@ -1,63 +1,157 @@
-# Based on .gitignore
+# ====================================================================
+# .dockerignore - Optimized for BuildKit & Minimal Context Size
+# ====================================================================
+# Excludes files not needed in Docker image to:
+# 1. Speed up build context transfer (smaller upload to daemon)
+# 2. Improve BuildKit layer caching
+# 3. Reduce final image size
+# ====================================================================
+
+# ------------------------------------
+# 1. Python Virtual Environments & Cache
+# ------------------------------------
 venv/
 .venv/
 env/
 ENV/
+# Python cache (multiple patterns for BuildKit compatibility)
 __pycache__/
+**/__pycache__/
+**/__pycache__
+*.pyc
+*.pyo
 *.py[cod]
 *$py.class
-.streamlit/
-.cache/
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
+*.so
+*.dylib
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ------------------------------------
+# 2. Build Artifacts & Distribution
+# ------------------------------------
 dist/
 build/
 *.egg-info/
+*.egg
+.eggs/
+wheels/
+sdist/
 
-# Docker-specific
-Dockerfile
+# ------------------------------------
+# 3. Deployment & Docker Files (not needed in container)
+# ------------------------------------
+Dockerfile*
 .dockerignore
-README.md
-*.md
+docker-compose*.yml
+deploy.sh
+*.sh
+
+# ------------------------------------
+# 4. Version Control
+# ------------------------------------
 .git/
 .gitignore
+.gitattributes
 
-# Logs and temporary files
-logs/
-*.log
-*.tmp
-
-# Documentation (keep README.md)
-docs/
-*.md
-!README.md
-
-# Test files
-tests/
-.pytest_cache/
-.coverage
-htmlcov/
-
-# CI/CD
+# ------------------------------------
+# 5. CI/CD Pipelines
+# ------------------------------------
 .github/
 .gitlab-ci.yml
 .travis.yml
+.circleci/
+azure-pipelines.yml
+Jenkinsfile
 
-# Environment files (use secrets management)
-.env
-.env.local
-.env.*.local
-
-# IDE
+# ------------------------------------
+# 6. Development & IDE Files
+# ------------------------------------
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+.project
+.pydevproject
+.settings/
 
-# OS files
+# ------------------------------------
+# 7. OS-Specific Files
+# ------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
+*.bak
+
+# ------------------------------------
+# 8. Logs & Temporary Files
+# ------------------------------------
+logs/
+*.log
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+
+# ------------------------------------
+# 9. Test Files & Coverage
+# ------------------------------------
+tests/
+test_*.py
+*_test.py
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# ------------------------------------
+# 10. Documentation (exclude to reduce context)
+# ------------------------------------
+docs/
+*.md
+!README.md
+*.rst
+*.txt
+!requirements.txt
+
+# ------------------------------------
+# 11. Environment & Secrets (CRITICAL - never include)
+# ------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+secrets/
+credentials/
+
+# ------------------------------------
+# 12. Streamlit-Specific
+# ------------------------------------
+.streamlit/secrets.toml
+
+# ------------------------------------
+# 13. Poetry & Package Manager Artifacts
+# ------------------------------------
+poetry.toml
+.poetry/
+
+# ------------------------------------
+# 14. Jupyter & Notebooks (if not needed)
+# ------------------------------------
+*.ipynb
+.ipynb_checkpoints/
+
+# ------------------------------------
+# 15. Large Binary/Media Files (add as needed)
+# ------------------------------------
+*.mp4
+*.avi
+*.mov
+*.zip
+*.tar
+*.tar.gz
