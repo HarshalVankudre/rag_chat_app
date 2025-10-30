@@ -7,15 +7,15 @@ import logging
 import uuid
 from collections.abc import Iterable
 from datetime import datetime as dt
+from datetime import timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 try:
     from docling.document_converter import DocumentConverter
 except ImportError:  # pragma: no cover - optional dependency
     DocumentConverter = None
-
 try:
     from pypdf import PdfReader
     from pypdf.errors import PdfReadError
@@ -28,12 +28,17 @@ except ImportError:  # pragma: no cover - optional dependency
     docx = None
 
 from openai import OpenAI
-from pinecone import Index
 
+# ---- v4-safe type-only import for Pinecone Index (runtime uses Any fallback) ----
+if TYPE_CHECKING:
+    from pinecone import Index  # type: ignore[attr-defined]
+else:
+    Index = Any  # type: ignore[misc,assignment]
+
+# Prefer package-absolute import; avoids IDE resolution issues in some setups.
+from rag.pinecone_utils import embed_texts
 from utils.chunk import chunk_text
 from utils.ids import pinecone_safe_slug, sanitize_namespace
-
-from .pinecone_utils import embed_texts
 
 PYPDF_MISSING_MSG = "pypdf is not installed"
 DOCX_MISSING_MSG = "python-docx is not installed"
@@ -88,7 +93,7 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
         if callable(exporter):
             try:
                 candidate = exporter()
-            except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive fallback
+            except (RuntimeError, ValueError, TypeError, AttributeError) as exc:  # defensive
                 logger.debug("Docling exporter %s failed for %s", attr, name, exc_info=exc)
                 continue
             if isinstance(candidate, str) and candidate.strip():
@@ -112,7 +117,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
             return _extract_with_docling(name, suffix, payload)
         except RuntimeError as exc:
             logger.info("Docling could not process %s: %s", name, exc)
-        except Exception as exc:  # noqa: BLE001  # pragma: no cover - defensive fallback
+        except (OSError, ValueError, TypeError) as exc:
             logger.warning("Docling processing crashed for %s", name, exc_info=exc)
 
     if suffix in [".txt", ".md", ".csv", ".log"]:
@@ -126,7 +131,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         if PdfReader is None:
             raise RuntimeError(PYPDF_MISSING_MSG)
         reader = PdfReader(io.BytesIO(payload))
-        units = []
+        units: list[tuple[str, str]] = []
         for i, page in enumerate(reader.pages):
             try:
                 page_text = page.extract_text() or ""
@@ -183,11 +188,7 @@ def build_context(
                 "id": match.get("id"),
                 "score": match.get("score"),
                 "source": str(src) if src else None,
-                "index": (
-                    str(metadata.get("index_name"))
-                    if metadata.get("index_name")
-                    else None
-                ),
+                "index": (str(metadata.get("index_name")) if metadata.get("index_name") else None),
             }
         )
     return {"context_text": "\n\n---\n\n".join(contexts), "sources": sources}
@@ -208,18 +209,19 @@ def upsert_chunks(
     md_source_key: str,
 ) -> dict[str, Any]:
     """Chunk, embed, and upsert document text into Pinecone."""
-    now = dt.utcnow().isoformat() + "Z"
+    # Use timezone-aware UTC datetimes; preferred over utcnow().
+    now = dt.now(timezone.utc).isoformat()
     doc_id = f"{pinecone_safe_slug(filename)}-{uuid.uuid4().hex[:8]}"
     all_chunks: list[str] = []
     all_sources: list[str] = []
     vec_ids: list[str] = []
+
+    # Chunk the input units
     for unit_text, unit_src in text_units:
-        for chunk in chunk_text(
-            unit_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap
-        ):
+        for chunk in chunk_text(unit_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap):
             all_chunks.append(chunk)
             all_sources.append(unit_src)
-    embeddings: list[list[float]] = []
+
     if not all_chunks:
         logger.warning("No text chunks found for %s, skipping upsert.", filename)
         return {
@@ -231,42 +233,50 @@ def upsert_chunks(
             "uploaded_at": now,
         }
 
+    # Embed in small batches to avoid rate limits
+    embeddings: list[list[float]] = []
     for i in range(0, len(all_chunks), 64):
         sub = all_chunks[i : i + 64]
         vecs = embed_texts(client, sub, embedding_model)
         embeddings.extend(vecs)
 
     def json_safe(meta: dict[str, Any]) -> dict[str, Any]:
-        """Coerce metadata to JSON-friendly primitives."""
+        """Coerce metadata to JSON-friendly primitives; drop None (Pinecone rejects null)."""
         out: dict[str, Any] = {}
         for key, value in meta.items():
-            if isinstance(value, (str | int | float | bool)) or value is None:
+            if value is None:
+                continue  # omit nulls entirely
+            if isinstance(value, str | int | float | bool):
                 out[key] = value
             else:
                 out[key] = str(value)
         return out
 
-    vectors: list[dict[str, Any]] = []
     ns = sanitize_namespace(namespace or "__default__")
+    vectors: list[tuple[str, list[float], dict[str, Any]]] = []
     for idx, (embedding, source, chunk_text_value) in enumerate(
         zip(embeddings, all_sources, all_chunks, strict=False)
     ):
         vid = f"{doc_id}::chunk-{idx:04d}"
-        meta = json_safe(
-            {
-                md_text_key: chunk_text_value,
-                md_source_key: source,
-                "doc_id": doc_id,
-                "filename": filename,
-                "uploaded_at": now,
-                "chunk_index": idx,
-                "index_name": index_name,
-            }
-        )
-        vectors.append({"id": vid, "values": [float(x) for x in embedding], "metadata": meta})
+        meta_raw: dict[str, Any] = {
+            md_text_key: chunk_text_value,
+            md_source_key: source,
+            "doc_id": doc_id,
+            "filename": filename,
+            "uploaded_at": now,
+            "chunk_index": idx,
+        }
+        if index_name:  # only include when present (avoid null metadata)
+            meta_raw["index_name"] = index_name
+
+        meta = json_safe(meta_raw)
+        vectors.append((vid, [float(x) for x in embedding], meta))
         vec_ids.append(vid)
+
+    # Upsert in chunks; Index.upsert accepts list[tuple[id, values, metadata]]
     for i in range(0, len(vectors), 1000):
         index.upsert(vectors=vectors[i : i + 1000], namespace=ns)
+
     return {
         "doc_id": doc_id,
         "filename": filename,
@@ -276,4 +286,3 @@ def upsert_chunks(
         "vector_ids": vec_ids,
         "uploaded_at": now,
     }
-

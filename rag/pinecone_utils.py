@@ -7,8 +7,8 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 
 from openai import OpenAI
-from pinecone import Index, Pinecone
-from pinecone.core.client.exceptions import PineconeException
+from pinecone import Pinecone
+from pinecone.exceptions import PineconeException
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +21,7 @@ def get_openai_client(api_key: str, base_url: str | None = None) -> OpenAI:
     return OpenAI(**kwargs)
 
 
-def get_pinecone_index(api_key: str, host: str | None, index_name: str | None) -> Index:
+def get_pinecone_index(api_key: str, host: str | None, index_name: str | None) -> Pinecone:
     """Return a Pinecone index using either the HTTP host or the index name."""
     pc = Pinecone(api_key=api_key)
     if host and host.strip():
@@ -37,7 +37,7 @@ def get_pinecone_indexes(
     host: str | None,
     index_name: str | None,
     extra_index_names: Sequence[str] | None,
-) -> list[tuple[str, Index]]:
+) -> list[tuple[str, Pinecone]]:
     """Return Pinecone index handles for retrieval across multiple indexes."""
     pc = Pinecone(api_key=api_key)
     if host and host.strip():
@@ -66,7 +66,7 @@ def embed_texts(client: OpenAI, texts: list[str], model: str) -> list[list[float
 
 
 def retrieve_chunks(
-    index: Index, query_vec: list[float], top_k: int, namespace: str | None
+    index: Pinecone, query_vec: list[float], top_k: int, namespace: str | None
 ) -> dict[str, Any]:
     """Query Pinecone for the closest ``top_k`` vectors."""
     return index.query(
@@ -79,7 +79,7 @@ def retrieve_chunks(
 
 
 def retrieve_from_indexes(
-    indexes: Sequence[tuple[str, Index]],
+    indexes: Sequence[tuple[str, Pinecone]],
     query_vec: list[float],
     top_k: int,
     namespace: str | None,

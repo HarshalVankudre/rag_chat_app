@@ -15,5 +15,6 @@ Thumbs.db
 dist/
 build/
 deploy.sh
+ocr-models/
 *.egg-info/" > .gitignore
 

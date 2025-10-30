@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 import streamlit as st
-from pinecone.core.client.exceptions import PineconeException
+from pinecone.exceptions import PineconeException
 from pydantic import ValidationError
 from pymongo.database import Database
 from pymongo.errors import PyMongoError
@@ -25,9 +25,7 @@ from rag.pinecone_utils import (
 logger = logging.getLogger(__name__)
 
 
-def ingest_panel(
-    db: Database | None, env_doc: dict[str, Any], lang: Mapping[str, str]
-) -> None:
+def ingest_panel(db: Database | None, env_doc: dict[str, Any], lang: Mapping[str, str]) -> None:
     """Render the ingestion workflow for uploading and indexing documents."""
     st.subheader(lang["ingest_title"])
 
@@ -65,9 +63,7 @@ def ingest_panel(
             disabled=bool(settings.pinecone_host),
         )
         chunk_size = st.number_input(lang["ingest_chunk_size"], 300, 4000, 1000, 100)
-        chunk_overlap = st.number_input(
-            lang["ingest_chunk_overlap"], 0, 1000, 200, 50
-        )
+        chunk_overlap = st.number_input(lang["ingest_chunk_overlap"], 0, 1000, 200, 50)
 
         submitted = st.form_submit_button(lang["ingest_submit_button"])
 
@@ -77,9 +73,7 @@ def ingest_panel(
         else:
             target_index = (target_index_input or default_index_value or "").strip() or None
             try:
-                client = get_openai_client(
-                    settings.openai_api_key, settings.openai_base_url
-                )
+                client = get_openai_client(settings.openai_api_key, settings.openai_base_url)
                 index = get_pinecone_index(
                     settings.pinecone_api_key,
                     settings.pinecone_host,
@@ -157,21 +151,16 @@ def ingest_panel(
                     )
                     col_a, col_b = st.columns([1, 3])
                     with col_a:
-                        if st.button(
-                            lang["ingest_delete_button"], key=f"delvec-{rec['_id']}"
-                        ):
+                        if st.button(lang["ingest_delete_button"], key=f"delvec-{rec['_id']}"):
                             try:
                                 index = get_pinecone_index(
                                     settings.pinecone_api_key,
                                     settings.pinecone_host,
-                                    rec.get("index_name")
-                                    or settings.pinecone_index_name,
+                                    rec.get("index_name") or settings.pinecone_index_name,
                                 )
                                 vec_ids = rec.get("vector_ids") or []
                                 if vec_ids:
-                                    index.delete(
-                                        ids=vec_ids, namespace=rec.get("namespace")
-                                    )
+                                    index.delete(ids=vec_ids, namespace=rec.get("namespace"))
                                 db[COL_INGEST].delete_one({"_id": rec["_id"]})
                                 st.success(lang["ingest_delete_success"])
                                 st.experimental_rerun() if hasattr(
