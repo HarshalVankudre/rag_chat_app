@@ -12,12 +12,14 @@ RUN pip install poetry
 # This leverages Docker's cache.
 COPY pyproject.toml poetry.lock ./
 
-# ---- THIS IS THE FIX ----
+# Configure poetry for CPU-only builds
 # Tell poetry to create the venv inside the project folder (at /app/.venv)
-# This ensures the COPY command in the next stage will find it.
 RUN poetry config virtualenvs.in-project true
 
-# Now, this command will correctly create the venv at /app/.venv
+# Install CPU-only PyTorch first to avoid NVIDIA dependencies
+RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+# Then install remaining dependencies with Poetry
 RUN poetry install --without dev --no-root
 
 # ---- STAGE 2: The Final Image ----
@@ -28,19 +30,27 @@ FROM python:3.10-slim
 WORKDIR /app
 
 # Copy the virtual environment from the builder stage
-# This command will now succeed!
+# This contains CPU-only PyTorch without NVIDIA/CUDA dependencies
 COPY --from=builder /app/.venv /app/.venv
 
 # Set the PATH to use the venv's binaries
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Optimize for CPU-only execution (4 cores, 4GB RAM)
+# ========================================
+# CPU-ONLY OPTIMIZATION SETTINGS
+# ========================================
 # Disable GPU fallback attempts
 ENV CUDA_VISIBLE_DEVICES=""
+ENV TORCH_CUDA_ARCH_LIST=""
+
 # Optimize thread settings for 4-core CPU
 ENV OMP_NUM_THREADS=4
 ENV OPENBLAS_NUM_THREADS=4
 ENV MKL_NUM_THREADS=4
+
+# Force CPU-only execution for PyTorch
+ENV PYTORCH_ENABLE_MPS_FALLBACK=0
+
 # Optimize OCR settings for CPU
 ENV DOCLING_RENDER_DPI=150
 ENV RAPID_OCR_MODEL_FLAVOR=mobile
@@ -48,6 +58,10 @@ ENV RAPID_OCR_ANGLE=0
 ENV RAPID_OCR_LANGS=en
 ENV DOCLING_PAR_WORKERS=2
 ENV EMBED_BATCH=64
+
+# Disable unnecessary GPU-related warnings
+ENV TRANSFORMERS_OFFLINE=0
+ENV HF_HUB_DISABLE_SYMLINKS_WARNING=1
 
 # Copy the rest of your application code
 COPY . .

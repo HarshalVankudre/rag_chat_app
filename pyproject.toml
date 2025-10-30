@@ -12,17 +12,20 @@ streamlit = ">=1.36"
 openai = ">=1.40.0"
 pydantic = ">=2.5.0"
 pypdf = ">=4.0.0"
-python-docx = ">=1.0.0"
 pymongo = ">=4.7.3"
 dnspython = ">=2.6.1"
 streamlit-authenticator = ">=0.3.0"
 bcrypt = ">=4.0.0"
-# Rich document parsing
-docling = ">=0.5.0"
 # Switched from pinecone-client to pinecone
 pinecone = "^7.3.0"
 # CPU-only ONNX Runtime for lightweight server deployments
 onnxruntime = "^1.23.2"
+# CPU-only PyTorch for docling (prevents NVIDIA/CUDA dependencies)
+# Install via: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+torch = "^2.5.0"
+torchvision = ">=0.20.0"
+# Rich document parsing with CPU-only PyTorch
+docling = ">=0.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"

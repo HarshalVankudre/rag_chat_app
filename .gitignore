@@ -7,6 +7,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .streamlit/
+deploy.sh
 .cache/
 .DS_Store
 Thumbs.db
@@ -14,6 +15,6 @@ Thumbs.db
 .vscode/
 dist/
 build/
-ocr-models/
+logs/
 *.egg-info/" > .gitignore
 
