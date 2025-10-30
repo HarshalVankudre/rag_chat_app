@@ -250,12 +250,19 @@ def update_password(
     # Hash and update new password
     try:
         new_hash = stauth.Hasher().hash(new_password)
-        db[COL_USERS].update_one(
+        result = db[COL_USERS].update_one(
             {"username": username},
             {"$set": {"password_hash": new_hash}},
         )
+        if result.matched_count == 0:
+            logger.warning("Password update matched no documents", extra={"username": username})
+            return "User not found."
+        if result.modified_count == 0:
+            logger.warning("Password update modified no documents", extra={"username": username})
+            return "Failed to update password. No changes were made."
     except PyMongoError:
         logger.exception("Failed to update password", extra={"username": username})
         return "Database error while updating password."
     
+    logger.info("Password updated successfully", extra={"username": username})
     return "ok"
