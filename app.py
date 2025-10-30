@@ -23,6 +23,7 @@ from db.mongo import (
 from services.bootstrap import AppBootstrapResult, bootstrap_application
 from ui.admin import admin_dashboard
 from ui.chat import process_new_message, render_chat_ui
+from ui.password import change_password_page
 
 APP_TITLE = "💬 RükoGPT"
 logger = logging.getLogger(__name__)
@@ -127,66 +128,6 @@ def get_auth_credentials(_db: Database) -> dict[str, Any]:
 
 def _resolve_user_role(db: Database, username: str) -> str:
     """Lookup the latest role for a user."""
-    user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
-    return user_doc_live.get("role", "user")
-
-
-def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any]) -> None:
-    """Render the authenticated portion of the UI."""
-    db = context.db
-    if db is None:
-        setup_screen(lang)
-        st.stop()
-
-    credentials = get_auth_credentials(db)
-
-    default_key = "your_strong_secret_key_here"
-    secret_key = context.env_doc.get("auth_secret_key", default_key)
-    expiry_days = int(context.env_doc.get("auth_cookie_expiry_days", 30))
-
-    if secret_key == default_key:
-        st.warning(
-            "Warning: Using default auth_secret_key. "
-            "Please set a strong secret key in your environment for security.",
-        )
-
-    authenticator = stauth.Authenticate(
-        credentials,
-        "rag_chat_cookie_v1",
-        secret_key,
-        cookie_expiry_days=expiry_days,
-    )
-
-    st.session_state.setdefault("auth_user", None)
-    st.session_state.setdefault("is_admin", False)
-
-    authenticator.login(
-        fields={
-            "Form name": lang["login_title"],
-            "Username": lang["username"],
-            "Password": lang["password"],
-            "Login": lang["login_button"],
-        },
-    )
-
-    if st.session_state.get("authentication_status"):
-        username = st.session_state["username"]
-        st.session_state["auth_user"] = username
-
-        user_role = _resolve_user_role(db, username)
-        st.session_state["is_admin"] = user_role == "admin"
-
-    logger.info(
-        "Refreshing authentication credentials cache for database '%s'.",
-        _db.name,
-    )
-    creds = fetch_all_users_for_auth(_db)
-    logger.info("Loaded %d user credential entries.", len(creds.get("usernames", {})))
-    return creds
-
-
-def _resolve_user_role(db: Database, username: str) -> str:
-    """Lookup the latest role for a user."""
 
     user_doc_live = db[COL_USERS].find_one({"username": username}) or {}
     return user_doc_live.get("role", "user")
@@ -246,21 +187,27 @@ def _render_authenticated_app(context: AppBootstrapResult, lang: dict[str, Any])
             )
             authenticator.logout(lang["sidebar_logout"], "sidebar")
 
+            # Navigation for all users
+            nav_options = [lang["sidebar_nav_chat"], lang["sidebar_nav_password"]]
             if st.session_state.get("is_admin"):
-                st.radio(
-                    "Admin Navigation",
-                    [lang["sidebar_nav_chat"], lang["sidebar_nav_admin"]],
-                    key="admin_view",
-                    label_visibility="collapsed",
-                    index=0,
-                )
-                st.divider()
+                nav_options.insert(1, lang["sidebar_nav_admin"])
+            
+            st.radio(
+                "Navigation",
+                nav_options,
+                key="user_view",
+                label_visibility="collapsed",
+                index=0,
+            )
+            st.divider()
 
-        admin_selection = st.session_state.get("admin_view", lang["sidebar_nav_chat"])
+        user_selection = st.session_state.get("user_view", lang["sidebar_nav_chat"])
         current_conv_id = None
         prompt = None
 
-        if st.session_state.get("is_admin") and admin_selection == lang["sidebar_nav_admin"]:
+        if user_selection == lang["sidebar_nav_password"]:
+            change_password_page(db, username, lang)
+        elif st.session_state.get("is_admin") and user_selection == lang["sidebar_nav_admin"]:
             current_conv_id = render_chat_ui(
                 db,
                 username,

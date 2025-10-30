@@ -216,3 +216,46 @@ def delete_user(db: Database, username: str) -> str | None:
         logger.exception("Failed to delete user", extra={"username": username})
         return "Database error while deleting user."
     return "ok"
+
+
+def update_password(
+    db: Database, username: str, current_password: str, new_password: str
+) -> str | None:
+    """Update a user's password after verifying the current password.
+    
+    Returns "ok" on success, or an error string on failure.
+    """
+    try:
+        user_doc = db[COL_USERS].find_one({"username": username})
+    except PyMongoError:
+        logger.exception("Failed to fetch user for password update", extra={"username": username})
+        return "Database error while fetching user."
+    
+    if not user_doc:
+        return "User not found."
+    
+    stored_hash = user_doc.get("password_hash", "")
+    if not stored_hash:
+        return "User password hash not found."
+    
+    # Verify current password
+    try:
+        hasher = stauth.Hasher()
+        if not hasher.verify(current_password, stored_hash):
+            return "Current password is incorrect."
+    except Exception as exc:
+        logger.exception("Failed to verify current password", extra={"username": username})
+        return "Failed to verify current password."
+    
+    # Hash and update new password
+    try:
+        new_hash = stauth.Hasher().hash(new_password)
+        db[COL_USERS].update_one(
+            {"username": username},
+            {"$set": {"password_hash": new_hash}},
+        )
+    except PyMongoError:
+        logger.exception("Failed to update password", extra={"username": username})
+        return "Database error while updating password."
+    
+    return "ok"
