@@ -4,6 +4,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from typing import Any
+"""Application configuration models used across the Streamlit app."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Mapping, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -26,6 +32,7 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
 
 def default_env() -> dict[str, Any]:
     """Return the baseline environment document used throughout the app."""
+
     return {
         "_id": "global",
         # OpenAI
@@ -110,6 +117,9 @@ class AppSettings(BaseModel):
     @model_validator(mode="after")
     def _validate_required_keys(self) -> AppSettings:
         """Validate secrets and normalise optional string fields."""
+    def _validate_required_keys(self):
+        """Validate secrets and normalise optional string fields."""
+
         if not (self.openai_api_key and self.openai_api_key.strip()):
             raise ValueError(MISSING_OPENAI_KEY_MSG)
         if not (self.pinecone_api_key and self.pinecone_api_key.strip()):
@@ -163,6 +173,9 @@ class AppSettings(BaseModel):
             raw_indexes = [str(raw_indexes)]
         else:
             raw_indexes = []
+    def from_env(cls, env_doc: Mapping[str, Any]) -> "AppSettings":
+        """Build an :class:`AppSettings` instance from a persisted env document."""
+
         return cls(
             openai_api_key=env_doc.get("openai_api_key", ""),
             openai_base_url=(env_doc.get("openai_base_url") or None),
