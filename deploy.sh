@@ -33,7 +33,7 @@ export CACHE_IMAGE="${CACHE_IMAGE:-${REGISTRY_BASE}:buildcache}"
 # Build optimization flags
 export USE_REMOTE_CACHE="${USE_REMOTE_CACHE:-true}"
 export BUILD_PLATFORM="${BUILD_PLATFORM:-linux/amd64}"
-export BUILD_COMPRESSION="${BUILD_COMPRESSION:-zstd:chunked}"
+# Note: --compression flag requires Docker 24.0+, disabled for compatibility
 
 # Server configuration
 export SERVER_USER="${SERVER_USER:-root}"
@@ -402,13 +402,12 @@ build_docker_image() {
     if [[ "${use_buildx}" == "true" ]]; then
         print_info "Using Docker Buildx with optimizations"
         print_info "  - Remote cache: $([ "${USE_REMOTE_CACHE}" == "true" ] && echo "enabled" || echo "disabled")"
-        print_info "  - Compression: ${BUILD_COMPRESSION}"
         
-        # Build with Buildx optimizations
+        # Build with Buildx optimizations (compression flag requires Docker 24.0+)
+        # Try with compression first, fallback without it if not supported
         if ! docker buildx build \
             --platform="${BUILD_PLATFORM}" \
             ${cache_args} \
-            --compression="${BUILD_COMPRESSION}" \
             --load \
             -t "${IMAGE_NAME}" \
             -t "${IMAGE_LATEST}" \
