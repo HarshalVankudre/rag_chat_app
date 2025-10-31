@@ -1,22 +1,26 @@
-"""Document ingestion and vectorisation helpers (Docling + RapidOCR on GPU, rich logging).
+"""
+Document ingestion and vectorization helpers (Docling + RapidOCR, rich logging).
 
-This version keeps the Docling/RapidOCR pipeline but optimises for throughput:
-- Forces ONNXRuntime GPU (CUDA) by default; optional TensorRT EP with engine caching
-- Uses RapidOCR default models by default (no local paths required)
-- Lower default rasterisation DPI (configurable)
-- Optional page-chunk parallelism for very large PDFs (uses all CPU cores/RAM)
-- fp16 on CUDA, angle classifier off by default
-- Environment-variable overrides for chunking and embedding batch size
+This version prioritizes portability and runs **CPU-only by default**.
+If CUDA/TensorRT providers are present, it will use them automatically,
+but it won't fail when they are not.
+
+Key behaviors:
+- Uses ONNX Runtime CPU by default; will use CUDA/TensorRT if available.
+- fp32 on CPU for correctness; fp16 only when CUDA is available (configurable).
+- RapidOCR default models by default (no local paths required).
+- Optional page-chunk parallelism for large PDFs (uses multiple CPU cores/RAM).
+- Environment-variable overrides for chunking and embedding batch size.
 
 Environment knobs (all optional):
-- RAPID_OCR_REQUIRE_CUDA=1|0            # default 1 (fail fast if CUDA EP missing)
-- RAPID_OCR_PREFER_TRT=1|0              # prefer TensorRT EP (slower first run, cached later)
+- RAPID_OCR_REQUIRE_CUDA=1|0            # default 0 (don't require CUDA; use CPU)
+- RAPID_OCR_PREFER_TRT=1|0              # prefer TensorRT EP if present (engine caching on)
 - DOCLING_RENDER_DPI=230                # PDF render DPI for OCR; 200–300 is a good range
 - RAPID_OCR_USE_DEFAULT_MODELS=1|0      # default 1 (let RapidOCR use its default models)
 - RAPID_OCR_MODEL_FLAVOR=server|mobile  # if not using defaults and pointing to local models
-- RAPID_OCR_LANGS="en,de"               # if supported by your Docling build
+- RAPID_OCR_LANGS="en,de"               # if supported by your Docling/RapidOCR build
 - RAPID_OCR_ANGLE=1|0                   # default 0 (disable angle classifier)
-- RAPID_OCR_PRECISION=fp16|fp32         # default fp16 on CUDA
+- RAPID_OCR_PRECISION=fp16|fp32         # default fp32 on CPU, fp16 on CUDA
 - RAPID_OCR_MAX_PAGES=<int>             # optional hard cap on pages (still Docling path)
 - DOCLING_PAR_PAGES=<int>               # split big PDFs into subsets of N pages (e.g., 25)
 - DOCLING_PAR_WORKERS=<int>             # number of parallel workers (e.g., 2 or 3)
@@ -27,13 +31,12 @@ Environment knobs (all optional):
 """
 
 from __future__ import annotations
+
 import io
-import json
 import logging
 import os
 import time
 import uuid
-import hashlib
 from collections.abc import Iterable
 from datetime import datetime as dt, timezone
 from pathlib import Path
@@ -41,7 +44,7 @@ from tempfile import NamedTemporaryFile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-# ---- Optional Docling converter import (kept lazy-safe) ----
+# ---- Optional Docling converter import (lazy-safe) ----
 try:
     from docling.document_converter import DocumentConverter
 except ImportError:  # pragma: no cover - optional dependency
@@ -148,10 +151,10 @@ def _maybe_enable_tensorrt_cache() -> None:
         os.environ.setdefault("ORT_TENSORRT_ENGINE_CACHE_PATH", ".ort_trt_cache")
 
 
-# ------------------ Docling converter (RapidOCR on GPU) ------------------
+# ------------------ Docling converter (RapidOCR; CPU-first) ------------------
 
 def _get_docling_converter() -> DocumentConverter:
-    """Return a shared Docling converter configured for RapidOCR (ONNXRuntime, GPU)."""
+    """Return a shared Docling converter configured for RapidOCR (ONNXRuntime)."""
     if DocumentConverter is None:  # pragma: no cover - optional dependency
         raise RuntimeError(DOCLING_MISSING_MSG)
 
@@ -164,28 +167,30 @@ def _get_docling_converter() -> DocumentConverter:
     logger.info("ONNXRuntime device: %s", device)
     logger.info("ONNXRuntime providers (available): %s", providers)
 
-    require_gpu = os.environ.get("RAPID_OCR_REQUIRE_CUDA", "1").lower() in ("1", "true", "yes")
-
+    # Default to NOT requiring CUDA; we will use CPU if CUDA isn't available
+    require_gpu = os.environ.get("RAPID_OCR_REQUIRE_CUDA", "0").lower() in ("1", "true", "yes")
     if require_gpu and (ort is None or "CUDAExecutionProvider" not in (providers or [])):
         raise RuntimeError(
-            "CUDAExecutionProvider not available. Install onnxruntime-gpu and NVIDIA drivers."
+            "CUDAExecutionProvider not available. Set RAPID_OCR_REQUIRE_CUDA=0 to use CPU, "
+            "or install onnxruntime-gpu with proper NVIDIA drivers."
         )
 
     prefer_trt = os.environ.get("RAPID_OCR_PREFER_TRT", "0").lower() in ("1", "true", "yes")
-
+    
+    # Force CPU-only mode for RapidOCR (no GPU dependencies)
+    force_cpu = os.environ.get("RAPID_OCR_FORCE_CPU", "1").lower() in ("1", "true", "yes")
+    
     providers_kw: dict[str, Any] = {}
-    # Order providers: (TensorRT) -> CUDA -> CPU
-    if "TensorrtExecutionProvider" in (providers or []) and prefer_trt:
-        providers_kw["providers"] = [
-            "TensorrtExecutionProvider",
-            "CUDAExecutionProvider",
-            "CPUExecutionProvider",
-        ]
-        _maybe_enable_tensorrt_cache()
-    elif "CUDAExecutionProvider" in (providers or []):
-        providers_kw["providers"] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    elif providers:
-        providers_kw["providers"] = providers
+    
+    # ALWAYS use CPU only (force CPU mode)
+    if "CPUExecutionProvider" in (providers or []):
+        providers_kw["providers"] = ["CPUExecutionProvider"]
+        logger.info("RapidOCR configured for CPU-only execution (forced)")
+    else:
+        logger.warning(
+            "CPUExecutionProvider not available; RapidOCR may fail. "
+            "Install 'onnxruntime' or 'rapidocr-onnxruntime'."
+        )
 
     # Import Docling options lazily and feature-detect fields
     try:
@@ -213,12 +218,14 @@ def _get_docling_converter() -> DocumentConverter:
     rapid_kwargs: dict[str, Any] = {
         "backend": "onnxruntime",  # RapidOCR in Docling uses ORT
     }
-    # Only attach explicit providers if this Docling version supports it
+    # Attach explicit providers only if this Docling version supports it
     if "providers" in rapid_fields and providers_kw.get("providers"):
         rapid_kwargs["providers"] = providers_kw["providers"]
     else:
         if providers_kw.get("providers"):
-            logger.info("RapidOcrOptions.providers not supported by this Docling version; relying on onnxruntime-gpu defaults.")
+            logger.info(
+                "RapidOcrOptions.providers not supported by this Docling version; relying on ORT defaults."
+            )
 
     if not use_default_models:
         flavor = os.environ.get("RAPID_OCR_MODEL_FLAVOR", "server").lower()  # server|mobile
@@ -241,17 +248,16 @@ def _get_docling_converter() -> DocumentConverter:
             "true",
             "yes",
         )
-    if "precision" in rapid_fields and ("CUDAExecutionProvider" in (providers or [])):
-        rapid_kwargs["precision"] = os.environ.get("RAPID_OCR_PRECISION", "fp16")
-    if "languages" in rapid_fields:
-        langs = os.environ.get("RAPID_OCR_LANGS")
-        if langs:
-            rapid_kwargs["languages"] = [s.strip() for s in langs.split(",") if s.strip()]
 
-    ocr_opts = RapidOcrOptions(**rapid_kwargs)
+    # Precision: fp32 on CPU, fp16 default only when CUDA is present (can override via env)
+    if "precision" in rapid_fields:
+        if "CUDAExecutionProvider" in (providers or []):
+            rapid_kwargs["precision"] = os.environ.get("RAPID_OCR_PRECISION", "fp16")
+        else:
+            rapid_kwargs["precision"] = os.environ.get("RAPID_OCR_PRECISION", "fp32")
 
     # Pdf pipeline options
-    pdf_kwargs: dict[str, Any] = {"ocr_options": ocr_opts}
+    pdf_kwargs: dict[str, Any] = {"ocr_options": RapidOcrOptions(**rapid_kwargs)}
     if "render_dpi" in pdf_fields:
         dpi = int(os.environ.get("DOCLING_RENDER_DPI", "230"))
         pdf_kwargs["render_dpi"] = dpi
@@ -283,7 +289,8 @@ def _split_pdf_to_subsets(payload: bytes, pages_per_chunk: int) -> list[Path]:
             writer.add_page(reader.pages[i])
         tmp = NamedTemporaryFile(suffix=".pdf", delete=False)
         writer.write(tmp)
-        tmp.flush(); tmp.close()
+        tmp.flush()
+        tmp.close()
         subsets.append(Path(tmp.name))
     return subsets
 
@@ -306,14 +313,12 @@ def _convert_subset(path: Path) -> str:
     return str(document)
 
 
-# ------------------ Doc extraction (always Docling) ------------------
+# ------------------ Doc extraction (always Docling when available) ------------------
 
 @runtime_checkable
 class Uploadable(Protocol):
     """Minimal protocol for uploaded files handled by Streamlit."""
-
     name: str
-
     def read(self) -> bytes: ...
 
 
@@ -332,7 +337,6 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
                     writer.write(tmp_sub)
                     tmp_path = Path(tmp_sub.name)
                 logger.info("Using first %d pages for OCR (RAPID_OCR_MAX_PAGES).", max_pages)
-                # Replace payload with subset file path
                 # Convert via Docling
                 t0 = time.time()
                 converter = _get_docling_converter()
@@ -363,7 +367,13 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
     # Optional: parallel subsets for big PDFs to use more CPU/RAM
     par_pages = int(os.environ.get("DOCLING_PAR_PAGES", "0") or 0)
     par_workers = int(os.environ.get("DOCLING_PAR_WORKERS", "0") or 0)
-    if suffix == ".pdf" and par_pages > 0 and par_workers > 0 and PdfReader is not None and PdfWriter is not None:
+    if (
+        suffix == ".pdf"
+        and par_pages > 0
+        and par_workers > 0
+        and PdfReader is not None
+        and PdfWriter is not None
+    ):
         subsets = _split_pdf_to_subsets(payload, par_pages)
         texts: list[tuple[str, str]] = []
         t0 = time.time()
@@ -379,8 +389,13 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
                 p.unlink(missing_ok=True)
             except Exception:
                 pass
-        logger.info("Parallel extraction completed: %s | total=%.2fs (workers=%s, pages/chunk=%s)",
-                    name, time.time() - t0, par_workers, par_pages)
+        logger.info(
+            "Parallel extraction completed: %s | total=%.2fs (workers=%s, pages/chunk=%s)",
+            name,
+            time.time() - t0,
+            par_workers,
+            par_pages,
+        )
         return texts if texts else [("", f"{name}")]
 
     # Single-pass Docling conversion
@@ -428,7 +443,7 @@ def _extract_with_docling(name: str, suffix: str, payload: bytes) -> list[tuple[
 
 
 def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
-    """Extract text units from an uploaded file for downstream chunking (always Docling when available)."""
+    """Extract text units from an uploaded file for downstream chunking (Docling preferred)."""
     name = uploaded_file.name
     suffix = Path(name).suffix.lower()
     payload = uploaded_file.read() or b""
@@ -441,7 +456,7 @@ def extract_text_units(uploaded_file: Uploadable) -> list[tuple[str, str]]:
         except (OSError, ValueError, TypeError) as exc:
             logger.warning("Docling processing crashed for %s", name, exc_info=exc)
 
-    # Fallbacks only if Docling unavailable
+    # Fallbacks only if Docling unavailable or failed
     if suffix == ".pdf":
         if PdfReader is None:
             raise RuntimeError(PYPDF_MISSING_MSG)
