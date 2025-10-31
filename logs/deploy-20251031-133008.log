@@ -1,0 +1,15 @@
+[2025-10-31 13:30:08] [STEP] Starting Deployment
+[2025-10-31 13:30:08] [INFO] Application: RAG Chat App
+[2025-10-31 13:30:08] [INFO] Target: 138.197.185.107
+[2025-10-31 13:30:08] [INFO] Image: registry.digitalocean.com/ruekogpt1/rag-chat-app:a30d4f5
+[2025-10-31 13:30:08] [INFO] Log file: ./logs/deploy-20251031-133008.log
+[2025-10-31 13:30:08] [STEP] Running Pre-Flight Checks
+[2025-10-31 13:30:09] [INFO] Validating deployment environment...
+[2025-10-31 13:30:09] [SUCCESS] MONGO_URI is configured
+[2025-10-31 13:30:09] [SUCCESS] Docker found: Docker version 28.5.1, build e180ab8
+[2025-10-31 13:30:09] [SUCCESS] Git found: git version 2.47.1.windows.1
+[2025-10-31 13:30:09] [SUCCESS] Environment validation passed
+[2025-10-31 13:30:09] [INFO] Checking Docker daemon access...
+[2025-10-31 13:30:09] [ERROR] Cannot access Docker daemon. Is Docker running?
+[2025-10-31 13:30:09] [INFO] Starting cleanup routine...
+[2025-10-31 13:30:09] [INFO] Cleanup completed successfully
