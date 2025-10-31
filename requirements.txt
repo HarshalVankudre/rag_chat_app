@@ -1,11 +1,22 @@
+# Runtime dependencies for rag-chat-app
+# Python compatibility: >=3.10,<3.13
+# Extra index to fetch CPU-only PyTorch wheels
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 streamlit>=1.36
 openai>=1.40.0
-pinecone>=5.0.0
 pydantic>=2.5.0
 pypdf>=4.0.0
-python-docx>=1.0.0
 pymongo>=4.7.3
 dnspython>=2.6.1
 streamlit-authenticator>=0.3.0
 bcrypt>=4.0.0
+pinecone>=7.3,<8
+torch==2.5.0+cpu
+torchvision==0.20.0+cpu
+# ONNX Runtime (CPU-only for RapidOCR)
+onnxruntime>=1.23.2
+# Document parsing + OCR
 docling>=0.5.0
+rapidocr>=2.0.0
+rapidocr-onnxruntime>=1.3.0
